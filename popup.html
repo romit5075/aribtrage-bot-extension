@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <style>
+    body {
+      width: 700px;
+      padding: 10px;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      text-align: center;
+      background-color: #f8f9fa;
+    }
+
+    h3 {
+      margin: 10px 0;
+      color: #2c3e50;
+    }
+
+    .controls {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 15px;
+    }
+
+    button {
+      background-color: #3498db;
+      color: white;
+      border: none;
+      padding: 8px 15px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 13px;
+    }
+
+    button:hover {
+      background-color: #2980b9;
+    }
+
+    button.clear-btn {
+      background-color: #e74c3c;
+    }
+
+    button.clear-btn:hover {
+      background-color: #c0392b;
+    }
+
+    #status {
+      margin: 10px 0;
+      font-size: 12px;
+      color: #7f8c8d;
+    }
+
+    /* Table Styles */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      margin-top: 10px;
+      background: white;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    }
+
+    th,
+    td {
+      padding: 6px;
+      text-align: center;
+      border-bottom: 1px solid #eee;
+    }
+
+    th {
+      background-color: #ecf0f1;
+      color: #34495e;
+      font-weight: 600;
+    }
+
+    .arb-profit {
+      color: #27ae60;
+      font-weight: bold;
+    }
+
+    .arb-loss {
+      color: #e74c3c;
+    }
+
+    .team-name {
+      font-weight: bold;
+      color: #2c3e50;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="header-row"
+    style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee;">
+    <h3 style="margin: 0;">Arb Scanner</h3>
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span id="converterStatusLabel" style="font-size: 10px; font-weight: bold; color: #27ae60;">Convert</span>
+      <label class="switch" style="position: relative; display: inline-block; width: 28px; height: 16px;">
+        <input type="checkbox" id="toggleConverter" checked>
+        <span class="slider round"
+          style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px;"></span>
+      </label>
+
+      <span id="hoverStatusLabel"
+        style="font-size: 10px; font-weight: bold; color: #27ae60; margin-left:10px;">Hover</span>
+      <label class="switch" style="position: relative; display: inline-block; width: 28px; height: 16px;">
+        <input type="checkbox" id="toggleHover" checked>
+        <span class="slider round"
+          style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px;"></span>
+      </label>
+
+      <span id="strictStatusLabel" style="font-size: 10px; font-weight: bold; color: #95a5a6; margin-left:10px;">Strict
+        Name</span>
+      <label class="switch" style="position: relative; display: inline-block; width: 28px; height: 16px;">
+        <input type="checkbox" id="toggleStrict">
+        <span class="slider round"
+          style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px;"></span>
+      </label>
+    </div>
+  </div>
+
+  <style>
+    /* Slider thumb */
+    .slider.round:before {
+      position: absolute;
+      content: "";
+      height: 14px;
+      width: 14px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+
+    input:checked+.slider {
+      background-color: #2196F3;
+    }
+
+    input:checked+.slider:before {
+      transform: translateX(14px);
+    }
+  </style>
+
+  <div class="controls">
+    <div id="timerDisplay"
+      style="text-align:center; font-weight:bold; color:#e67e22; margin-top:5px; height:15px; font-size:12px;"></div>
+    <button id="scanPolyBtn" style="background-color: #29b6f6;">Scan Poly</button>
+    <button id="scanStakeBtn" style="background-color: #00bfa5;">Scan Stake</button>
+    <button id="clearBtn" class="clear-btn">Clear</button>
+  </div>
+
+  <div class="controls" style="border-top: 1px solid #eee; padding-top: 10px;">
+    <button id="startMonitorBtn" style="background-color: #8e44ad; width: 100%;">start Monitor (10s)</button>
+    <button id="stopMonitorBtn" style="background-color: #95a5a6; display: none; width: 100%;">Stop Monitor</button>
+    <button id="downloadLogsBtn" style="background-color: #34495e; display: none;">Logs</button>
+  </div>
+
+  <div style="display: flex; justify-content: space-around; font-size: 11px; margin-bottom: 10px;">
+    <span id="polyStatus" style="color: #ccc;">● Polymarket Data</span>
+    <span id="stackStatus" style="color: #ccc;">● Stake Data</span>
+  </div>
+
+  <div id="status" style="margin: 10px 0; font-size: 12px; color: #7f8c8d;">Ready to scan...</div>
+
+  <div id="resultsArea">
+    <!-- Tables will be injected here -->
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>
