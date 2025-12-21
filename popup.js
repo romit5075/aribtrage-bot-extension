@@ -228,6 +228,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // Match (e.g. HOU-DEN) | Poly HOU | Poly DEN | Stake HOU | Stake DEN | Arb % (P-HOU/S-DEN) | Arb % (P-DEN/S-HOU)
 
         let tableHtml = `
+            <style>
+                table { border-collapse: collapse; width: 100%; }
+                /* Zebra Striping */
+                tbody tr:nth-child(even) { background-color: #f9f9f9; }
+                tbody tr:nth-child(odd) { background-color: #ffffff; }
+                /* Hover effect */
+                tbody tr:hover { background-color: #f0f0f0; }
+            </style>
             <table>
                 <thead>
                     <tr>
@@ -270,8 +278,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (n2.startsWith(n1) || n1.startsWith(n2)) score += 50;
 
                     // B. Subsequence Match for short tickers (e.g. WSH -> WaSHington)
-                    // Only if one is short (< 4 chars) and FIRST LETTER MATCHES
-                    if ((n1.length <= 4 || n2.length <= 4) && n1[0] === n2[0]) {
+                    // Only if one is short (< 4 chars)
+                    if (n1.length <= 4 || n2.length <= 4) {
                         const short = n1.length < n2.length ? n1 : n2;
                         const long = n1.length < n2.length ? n2 : n1;
 
@@ -285,6 +293,15 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         // If we matched all chars of short in long
                         if (sIdx === short.length) score += 40;
+                    }
+
+                    // C. Token Overlap (e.g. 'Hawks' in 'Atlanta Hawks')
+                    // Split by space
+                    const tokens1 = n1.split(' ').filter(t => t.length > 2);
+                    const tokens2 = n2.split(' ').filter(t => t.length > 2);
+
+                    if (tokens1.some(t1 => n2.includes(t1)) || tokens2.some(t2 => n1.includes(t2))) {
+                        score += 30;
                     }
 
                     if (score > bestScore) {
@@ -309,26 +326,20 @@ document.addEventListener('DOMContentLoaded', () => {
             const stakeAway = findOdds(stackOdds, away.team);
 
             if (stakeHome && stakeAway) {
+                // ... (Existing Perfect Match Logic) ...
                 // Determine confidence if not strict match
                 let confidence = 100;
                 if (!strictMatch) {
-                    // Estimate from our logic (simplified here as we don't have the exact calc exposed, but we can infer)
-                    // Or better, we should have the confidence passed in opportunities?
-                    // But here we are re-calc table from raw lists.
-                    // Let's reuse the helper logic briefly or just visual.
-                    // For now, let's just mark it if names differ.
                     if (home.team !== stakeHome.team) confidence -= 10;
                 }
 
-                // Handle Suspended
+                // Handle Suspended Checks...
                 const isSuspended = (val) => val === 'Suspended';
 
                 if (isSuspended(home.odds) || isSuspended(away.odds) ||
                     isSuspended(stakeHome.odds) || isSuspended(stakeAway.odds)) {
-
-                    // Just show dash for suspended items but keep the row clean
+                    // Suspended Row
                     const formatOdds = (val) => isSuspended(val) ? '-' : val;
-
                     tableHtml += `
                         <tr>
                             <td><b>${home.team}</b><br/><span style="font-size:9px;color:#aaa">${stakeHome.team}</span></td>
@@ -337,14 +348,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             <td style="color:${isSuspended(stakeHome.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(stakeHome.odds)}</td>
                             <td style="color:${isSuspended(stakeAway.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(stakeAway.odds)}</td>
                             <td colspan="2" style="font-size:10px; color:#95a5a6">-</td>
-                        </tr>
-                     `;
+                        </tr>`;
                 } else {
-                    // Calc Arb 1: Poly Home vs Stake Away
+                    // Active Match Row
                     const arb1 = calculateArb(home.odds, stakeAway.odds);
-
-                    // Calc Arb 2: Poly Away vs Stake Home
                     const arb2 = calculateArb(away.odds, stakeHome.odds);
+
+                    // Highlight colors
+                    const highlightStyle = "background-color: #ffe0b2; color: #e65100; font-weight: bold;"; // Light orange bg, dark orange text
 
                     tableHtml += `
                         <tr>
@@ -352,31 +363,49 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <b>${home.team}</b> vs <b>${away.team}</b>
                                 ${home.team !== stakeHome.team ? `<br/><span style="font-size:9px;color:#f39c12">Match: ${stakeHome.team}</span>` : ''}
                             </td>
-                            <td>${home.odds}</td>
-                            <td>${away.odds}</td>
-                            <td>${stakeHome.odds}</td>
-                            <td>${stakeAway.odds}</td>
+                            
+                            <!-- Poly Home (Arb 1 Winner?) -->
+                            <td style="${arb1.profit > 0 ? highlightStyle : ''}">${home.odds}</td>
+                            
+                            <!-- Poly Away (Arb 2 Winner?) -->
+                            <td style="${arb2.profit > 0 ? highlightStyle : ''}">${away.odds}</td>
+                            
+                            <!-- Stake Home (Arb 2 Winner?) -->
+                            <td style="${arb2.profit > 0 ? highlightStyle : ''}">${stakeHome.odds}</td>
+                            
+                            <!-- Stake Away (Arb 1 Winner?) -->
+                            <td style="${arb1.profit > 0 ? highlightStyle : ''}">${stakeAway.odds}</td>
+                            
                             <td class="${arb1.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb1.profit}%</td>
                             <td class="${arb2.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb2.profit}%</td>
-                        </tr>
-                     `;
+                        </tr>`;
                 }
+
             } else {
-                // Partial match or no match
-                // Maybe show partial row?
-                if (stakeHome || stakeAway) {
-                    tableHtml += `
-                        <tr>
-                            <td>${home.team} vs ${away.team}</td>
-                            <td>${home.odds}</td>
-                            <td>${away.odds}</td>
-                            <td>${stakeHome ? stakeHome.odds : '-'}</td>
-                            <td>${stakeAway ? stakeAway.odds : '-'}</td>
-                            <td>-</td>
-                            <td>-</td>
-                        </tr>
-                     `;
-                }
+                // PARTIAL or NO MATCH
+                // Use dashed placeholders if Stake missing
+                const sH = stakeHome ? stakeHome.team : null;
+                const sA = stakeAway ? stakeAway.team : null;
+
+                const displayTeam = (polyName, stakeName) => {
+                    if (stakeName && stakeName !== polyName) return `${polyName}<br/><span style="font-size:9px;color:#aaa">(${stakeName})</span>`;
+                    return polyName;
+                };
+
+                // Even if totally missing, show row to prove Poly scanned
+                tableHtml += `
+                    <tr>
+                        <td>
+                            <b>${home.team}</b> vs <b>${away.team}</b>
+                        </td>
+                        <td>${home.odds}</td>
+                        <td>${away.odds}</td>
+                        <td style="color:#aaa">${stakeHome ? stakeHome.odds : '-'}</td>
+                        <td style="color:#aaa">${stakeAway ? stakeAway.odds : '-'}</td>
+                        <td style="color:#aaa">-</td>
+                        <td style="color:#aaa">-</td>
+                    </tr>
+                 `;
             }
         }
 

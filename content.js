@@ -73,80 +73,26 @@ function scrapePageData() {
     }
 
     // 2. Try Scraper B (Stack / Decimal)
-    // NOTE: Stack classes might be dynamic.
-    // 'outcome-content' is a common class seen in provided HTML. 
-    // If that fails, we can try a more generic approach searching for odds-like structures.
     if (data.odds.length === 0) {
-        // Primary Selector: based on provided structure 
-        // <button data-testid="outcome-content">... <span>Team</span> ... <span>2.00</span> ...</button>
-        let stackItems = document.querySelectorAll('.outcome-content, [data-testid="outcome-content"], button[class*="outcome"]');
-
-        // If still 0, try finding any button with decimal numbers? (Risky but fallback)
-        if (stackItems.length === 0) {
-            // Fallback: look for generic containers with team and odds
-            // This is harder without specific classes. Let's stick to known selectors and log if empty.
-            console.log("No standard stack items found.");
-        }
-
+        const stackItems = document.querySelectorAll('.outcome-content');
         if (stackItems.length > 0) {
             data.type = 'stack';
             stackItems.forEach(item => {
-                // Name usually in a span or div with name-like class
-                // Or just the first significant text node
-                let nameEl = item.querySelector('[data-testid="outcome-button-name"]');
-                if (!nameEl) {
-                    // Try finding a direct child span that is NOT the odds
-                    const spans = item.querySelectorAll('span');
-                    // Heuristic: Name is usually longer text, Odds is number
-                    for (let s of spans) {
-                        if (!s.textContent.match(/^[\d\.]+$/)) {
-                            nameEl = s;
-                            break;
-                        }
-                    }
-                }
-
-                // Odds Container
-                let oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
-                if (!oddsContainer) {
-                    // Try finding last span with number
-                    const spans = item.querySelectorAll('span');
-                    for (let i = spans.length - 1; i >= 0; i--) {
-                        if (spans[i].textContent.match(/^[\d\.]+$/)) {
-                            oddsContainer = spans[i];
-                            break;
-                        }
-                    }
-                }
+                const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
+                const oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
 
                 const team = nameEl ? nameEl.textContent.trim().toUpperCase() : 'UNKNOWN';
 
                 let odds = null;
                 if (oddsContainer) {
-                    // Match decimal (1.88) or integer (2) - or even "12.50"
-                    // Also check for "Suspended"
-                    const text = oddsContainer.textContent.trim();
-                    if (text.toLowerCase().includes('suspended') || item.disabled) {
-                        odds = 'Suspended';
-                    } else {
-                        const oddsText = text.match(/(\d+(\.\d+)?)/);
-                        if (oddsText) {
-                            odds = parseFloat(oddsText[1]);
-                        }
-                    }
-                }
-                // Fallback: Check if the button itself text has the odds
-                else {
-                    const text = item.textContent.trim();
-                    if (text.toLowerCase().includes('suspended')) {
-                        odds = 'Suspended';
-                    } else {
-                        const match = text.match(/(\d+(\.\d+)?)$/); // number at end?
-                        if (match) odds = parseFloat(match[1]);
+                    // Match decimal (1.88) or integer (2)
+                    const oddsText = oddsContainer.textContent.match(/(\d+(\.\d+)?)/);
+                    if (oddsText) {
+                        odds = parseFloat(oddsText[1]);
                     }
                 }
 
-                if (team && team !== 'UNKNOWN' && odds) {
+                if (team && odds && !isNaN(odds)) {
                     data.odds.push({ team, odds, source: 'Stack' });
                 }
             });
@@ -171,13 +117,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             stopObserver();
         }
     }
-    if (request.action === "play_sound") {
-        playNotificationSound();
-    }
-    // Forward hover toggle to dedicated handler if needed, or handle here
-    if (request.action === "toggleHoverArb") {
-        // ... handled in hoverArb.js or similar? 
-        // If logic is here, enable/disable.
+
+    if (request.action === "highlight_odds") {
+        const targets = request.targets || []; // Array of { team, type } 
+        // type: 'polymarket' or 'stack'
+
+        // Remove old highlights
+        document.querySelectorAll('.arb-highlight-box').forEach(el => el.classList.remove('arb-highlight-box'));
+
+        // Highlight new targets
+        targets.forEach(tgt => {
+            // Logic to find and highlight in DOM
+            if (tgt.type === 'stack') {
+                const stackItems = document.querySelectorAll('.outcome-content');
+                stackItems.forEach(item => {
+                    const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
+                    if (nameEl) {
+                        const teamName = nameEl.textContent.trim().toUpperCase();
+                        // Simple includes match
+                        if (teamName.includes(tgt.team) || tgt.team.includes(teamName)) {
+                            // Found it! Apply style to the BUTTON container group
+                            const container = item.closest('button');
+                            if (container) {
+                                container.setAttribute('style', 'background-color: #ffe0b2 !important; border: 2px solid #e65100 !important;');
+                            }
+                        }
+                    }
+                });
+            } else if (tgt.type === 'polymarket') {
+                const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+                polyButtons.forEach(btn => {
+                    const txt = btn.textContent.trim().toUpperCase();
+                    if (txt.includes(tgt.team)) {
+                        btn.setAttribute('style', 'background-color: #ffe0b2 !important; border: 2px solid #e65100 !important;');
+                    }
+                });
+            }
+        });
     }
 });
 
