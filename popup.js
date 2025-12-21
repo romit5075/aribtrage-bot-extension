@@ -116,6 +116,43 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- Live Scan Toggle ---
+    const toggleLive = document.getElementById('toggleLiveScan');
+    const liveStatusLabel = document.getElementById('liveScanStatusLabel');
+
+    function updateLiveUI(isActive) {
+        if (toggleLive) toggleLive.checked = isActive;
+        if (liveStatusLabel) {
+            liveStatusLabel.style.color = isActive ? "#27ae60" : "#95a5a6";
+        }
+        // If live active, maybe hide start monitor button?
+        const startBtn = document.getElementById('startMonitorBtn');
+        if (startBtn) {
+            startBtn.disabled = isActive;
+            startBtn.textContent = isActive ? "Live Monitoring Active" : "start Monitor (10s)";
+            startBtn.style.opacity = isActive ? "0.6" : "1";
+        }
+    }
+
+    chrome.storage.local.get(['liveScanEnabled'], (result) => {
+        const isLive = result.liveScanEnabled === true;
+        updateLiveUI(isLive);
+    });
+
+    if (toggleLive) {
+        toggleLive.addEventListener('change', async (e) => {
+            const isLive = e.target.checked;
+            updateLiveUI(isLive);
+            chrome.storage.local.set({ liveScanEnabled: isLive });
+
+            // Notify active tab
+            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tab) {
+                chrome.tabs.sendMessage(tab.id, { action: "toggleLive", enabled: isLive });
+            }
+        });
+    }
+
     // 2. Scan Handlers
     const performScan = async (expectedType) => {
         if (statusText) statusText.textContent = `Scanning for ${expectedType}...`;
@@ -301,7 +338,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const tokens2 = n2.split(' ').filter(t => t.length > 2);
 
                     if (tokens1.some(t1 => n2.includes(t1)) || tokens2.some(t2 => n1.includes(t2))) {
-                        score += 30;
+                        score += 10; // Reduced from 30 to avoid false positive like 'Washington' matching 'Wizards' if both have 'Washington'
                     }
 
                     if (score > bestScore) {

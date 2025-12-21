@@ -1,78 +1,68 @@
-// Expose to window for popup access (via executeScript)
+// Expose to window
 window.scrapePageData = scrapePageData;
 
+// --- ROBUST SCRAPER (Ported from Background) ---
 function scrapePageData() {
-    const data = {
-        type: 'unknown',
-        odds: []
+    const data = { type: 'unknown', odds: [] };
+
+    const parsePolyOdds = (str) => {
+        if (!str) return null;
+        if (str.toLowerCase().includes('suspended')) return 'Suspended';
+        const match = str.match(/(\d+)\s*¢/);
+        if (match) {
+            const cents = parseInt(match[1], 10);
+            return cents > 0 ? (100 / cents).toFixed(2) : null;
+        }
+        return null;
     };
 
-    // 1. Try Scraper A (Polymarket / Cents)
-    // 1. Try Scraper A (Polymarket / Cents)
-    // Supports standard and potential dynamic classes
-    const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+    const parseStakeOdds = (str) => {
+        if (!str) return null;
+        if (str.toLowerCase().includes('suspended') || str.toLowerCase().includes('unavailable')) return 'Suspended';
+        const match = str.match(/(\d+(\.\d+)?)/);
+        return match ? parseFloat(match[1]) : null;
+    };
 
+    // Time Parser
+    const parseTime = (dateStr, timeStr) => {
+        try {
+            // Normalize to "Dec 22 2:00 AM" or similar key
+            const dBase = dateStr.replace(/^[A-Za-z]+, /, '').replace('December', 'Dec').trim();
+            return `${dBase} ${timeStr}`;
+        } catch (e) { return null; }
+    };
+
+    // 1. Polymarket Scraper
+    const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
     if (polyButtons.length > 0) {
         data.type = 'polymarket';
         polyButtons.forEach(btn => {
-            // Team Name
-            // In the provided HTML, the team name is in a span with class "opacity-70"
-            // e.g. <span class="opacity-70  ">hou</span>
             let team = 'UNKNOWN';
             const teamNode = btn.querySelector('.opacity-70');
             if (teamNode) {
                 team = teamNode.textContent.trim().toUpperCase();
             } else {
-                // Fallback: simple text scan if class is missing
-                const fullText = btn.textContent.trim();
-                const match = fullText.match(/^([A-Z]{3})/);
+                const txt = btn.textContent.trim();
+                const match = txt.match(/^([A-Z]{3})/);
                 if (match) team = match[1];
             }
 
-            // Odds (Cents) or Suspended
-            // The HTML structure separates cents and our converted tag.
-            // We need to read just the cents part.
-            // Clone to avoid manipulating live DOM
             const clone = btn.cloneNode(true);
-
-            // Remove our converted tags from clone to get clean text (if they exist)
-            const injectedTags = clone.querySelectorAll('.odds-converted-tag');
-            injectedTags.forEach(tag => tag.remove());
-
-            // Remove team strings if attached
+            const tags = clone.querySelectorAll('.odds-converted-tag');
+            tags.forEach(t => t.remove());
             const teamEl = clone.querySelector('.opacity-70');
             if (teamEl) teamEl.remove();
 
-            // Now textContent should be something like "49¢" or " 49¢ " or "Suspended"
-            const cleanText = clone.textContent.trim();
-
-            let odds = null;
-
-            if (cleanText.toLowerCase().includes('suspended')) {
-                odds = 'Suspended';
-            } else {
-                // Match pattern "49¢"
-                const match = cleanText.match(/(\d+)\s*¢/);
-                if (match) {
-                    const cents = parseInt(match[1], 10);
-                    if (cents > 0) {
-                        odds = (100 / cents).toFixed(2);
-                    }
-                }
-            }
+            const rawText = clone.textContent.trim();
+            const odds = parsePolyOdds(rawText);
 
             if (team !== 'UNKNOWN' && odds) {
-                // Keep 'Suspended' as a valid state to report, but handle it downstream
-                if (odds === 'Suspended') {
-                    data.odds.push({ team, odds: 'Suspended', source: 'Poly' });
-                } else {
-                    data.odds.push({ team, odds: parseFloat(odds), source: 'Poly' });
-                }
+                data.odds.push({ team, odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds), source: 'Poly' });
             }
         });
     }
 
-    // 2. Try Scraper B (Stack / Decimal)
+    // 2. Stake/SX Scraper
     if (data.odds.length === 0) {
         const stackItems = document.querySelectorAll('.outcome-content');
         if (stackItems.length > 0) {
@@ -82,31 +72,87 @@ function scrapePageData() {
                 const oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
 
                 const team = nameEl ? nameEl.textContent.trim().toUpperCase() : 'UNKNOWN';
-
                 let odds = null;
+
                 if (oddsContainer) {
-                    // Match decimal (1.88) or integer (2)
-                    const oddsText = oddsContainer.textContent.match(/(\d+(\.\d+)?)/);
-                    if (oddsText) {
-                        odds = parseFloat(oddsText[1]);
+                    odds = parseStakeOdds(oddsContainer.textContent);
+                } else {
+                    const btn = item.closest('button');
+                    if (btn && btn.disabled) odds = 'Suspended';
+                }
+
+                // Time Extraction
+                const fixture = item.closest('[data-testid="fixture-preview"]');
+                let timeKey = null;
+                if (fixture) {
+                    const fixtureDetails = fixture.querySelector('.fixture-details');
+                    if (fixtureDetails) {
+                        timeKey = fixtureDetails.textContent.trim();
                     }
                 }
 
-                if (team && odds && !isNaN(odds)) {
-                    data.odds.push({ team, odds, source: 'Stack' });
+                if (team !== 'UNKNOWN' && odds) {
+                    const finalOdds = (odds === 'Suspended') ? 'Suspended' : parseFloat(odds);
+                    if (finalOdds === 'Suspended' || !isNaN(finalOdds)) {
+                        data.odds.push({ team, odds: finalOdds, source: 'Stack', time: timeKey });
+                    }
                 }
             });
+
+            // Auto Click Load More (Throttle check?)
+            // Only click if we are NOT in a tight loop. For Live Monitor, maybe avoid spam clicking?
+            // Let's allow it but maybe careful.
+            const buttons = Array.from(document.querySelectorAll('button, div[role="button"], div.contents'));
+            const loadMore = buttons.find(b => b.textContent.trim().toLowerCase() === 'load more');
+            if (loadMore) {
+                // console.log("Live: Auto-clicking Load More...");
+                // loadMore.click(); 
+                // Allow it for now, observer will re-trigger
+            }
         }
     }
 
     return data;
 }
 
-// Handler for the scraping request (Legacy fallback)
+// --- Live Monitoring ---
+let liveObserver = null;
+let liveDebounce = null;
+
+function startLiveMonitoring() {
+    stopLiveMonitoring(); // reset
+    console.log("Starting Live Monitoring...");
+
+    // Initial Sent
+    chrome.runtime.sendMessage({ action: "live_data_upate", data: scrapePageData() });
+
+    liveObserver = new MutationObserver((mutations) => {
+        // Debounce updates
+        if (liveDebounce) clearTimeout(liveDebounce);
+        liveDebounce = setTimeout(() => {
+            const data = scrapePageData();
+            if (data.odds.length > 0) {
+                chrome.runtime.sendMessage({ action: "live_data_update", data: data });
+            }
+        }, 500); // 500ms debounce
+    });
+
+    // Observe body for subtree mods
+    liveObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+}
+
+function stopLiveMonitoring() {
+    if (liveObserver) {
+        liveObserver.disconnect();
+        liveObserver = null;
+    }
+    if (liveDebounce) clearTimeout(liveDebounce);
+}
+
+// Handler
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "scrape_odds") {
-        const data = scrapePageData();
-        sendResponse(data);
+        sendResponse(scrapePageData());
     }
     if (request.action === "toggleState") {
         if (request.isEnabled) {
@@ -117,7 +163,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             stopObserver();
         }
     }
-
+    if (request.action === "toggleLive") {
+        if (request.enabled) startLiveMonitoring();
+        else stopLiveMonitoring();
+    }
+    // ... highlight handler below ...
     if (request.action === "highlight_odds") {
         const targets = request.targets || []; // Array of { team, type } 
         // type: 'polymarket' or 'stack'
