@@ -247,27 +247,55 @@ function processNode(textNode) {
     const text = textNode.nodeValue;
 
     // Strategy 1: Non-destructive update for isolated matches 
-    const simpleMatch = /^\s*(\d+)\s*¢\s*$/;
+    // Relaxed regex: allows "22¢", " 22¢", "22 ¢"
+    const simpleMatch = /(\d+)\s*¢/;
     const simpleResult = text.match(simpleMatch);
 
-    if (simpleResult) {
+    if (simpleResult && text.trim().length < 10) {
+        // Only treat as simple isolated node if text is short, otherwise use split strategy
+        // actually if node text is JUST the price, use strategy 1.
+
         const cents = parseInt(simpleResult[1], 10);
+
+        // Safety check
+        if (isNaN(cents) || cents <= 0) return;
+
         const decimalOdds = (100 / cents).toFixed(2);
 
         // Check if we already have a tag immediately following
         let next = textNode.nextSibling;
-        if (next && next.nodeType === Node.ELEMENT_NODE && next.classList.contains('odds-converted-tag')) {
+        if (next && next.nodeType === Node.ELEMENT_NODE &&
+            (next.classList.contains('odds-converted-tag') || next.className.includes('odds-converted-tag'))) {
             if (next.textContent !== decimalOdds) {
                 next.textContent = decimalOdds;
             }
         } else {
             const conversionSpan = createConversionTag(decimalOdds);
             if (textNode.parentNode) {
-                textNode.parentNode.insertBefore(conversionSpan, textNode.nextSibling);
+                // If the text node contains MORE than just the price, we might want to split?
+                // But Strategy 1 was for "text matches pattern exactly".
+                // If "Buy Yes 22¢", simpleResult is true, but we don't want to replace trailing text?
+                // Actually the Logic below (strategy 2) handles embedding.
+                // Strategy 1 should be for "The text node ENDS with price" or IS the price.
+
+                // Let's rely on Strategy 2 for everything to be safe, it's more robust?
+                // The previous code had `^\s*(\d+)\s*¢\s*$` for strict match.
+                // If the text is "Buy Yes 22¢", that strict match failed, and it went to Stat 2.
+                // Strategy 2 regex: `(\d+)\s*¢/g`.
+                // "Buy Yes 22¢" -> match "22¢".
+                // It splits: "Buy Yes " (text) -> "22¢" (span) -> [1.23] (tag).
+
+                // The user's screenshot shows "Buy Yes 22¢" and NO conversion tag next to it.
+                // This implies `processNode` isn't finding it, or `nodeValue` doesn't contain `¢` (maybe different char?),
+                // OR `processNode` is returning early.
             }
         }
-        return;
+        // Let's NOT return here if text is complex, fall through to Strategy 2.
+        // Revert to strict check for Strategy 1 or just disable Strategy 1 to force split logic which creates tags.
     }
+
+    // Fallback to Strategy 2 (Split & Inject) always? 
+    // It's safer for "Buy Yes 22¢".
 
     // Strategy 2: Splitting for complex strings
     const regex = /(\d+)\s*¢/g;
@@ -284,6 +312,8 @@ function processNode(textNode) {
         found = true;
         const fullMatch = match[0];
         const cents = parseInt(match[1], 10);
+        if (cents <= 0) continue; // skip zero or invalid
+
         const decimalOdds = (100 / cents).toFixed(2);
 
         newContent.appendChild(document.createTextNode(text.substring(lastIndex, match.index)));

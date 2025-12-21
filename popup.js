@@ -154,12 +154,41 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 2. Scan Handlers
+
+    // Helper to find tab by keyword
+    async function findTabByKeyword(keyword) {
+        const tabs = await chrome.tabs.query({});
+        return tabs.find(t => t.url && t.url.toLowerCase().includes(keyword.toLowerCase()));
+    }
+
+    const updateStatusTick = (type, success) => {
+        const tick = type === 'polymarket' ? document.getElementById('polyTick') : document.getElementById('stakeTick');
+        const box = type === 'polymarket' ? document.getElementById('polyStatusBox') : document.getElementById('stakeStatusBox');
+
+        if (tick && box) {
+            // Use SVG Icons
+            const iconCheck = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="check-icon"><path d="M20 6L9 17l-5-5" stroke="#27ae60" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+            const iconCross = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" class="cross-icon"><path d="M18 6L6 18M6 6l12 12" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+            tick.innerHTML = success ? iconCheck : iconCross;
+            box.style.opacity = success ? "1" : "0.5";
+            box.style.color = success ? "#27ae60" : "#e74c3c";
+        }
+    };
+
     const performScan = async (expectedType) => {
-        if (statusText) statusText.textContent = `Scanning for ${expectedType}...`;
+        if (statusText) statusText.textContent = `Scanning ${expectedType}...`;
 
         try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (!tab) return;
+            // Find target tab intelligently
+            let keyword = expectedType === 'polymarket' ? 'polymarket.com' : 'stake.'; // stake.com, stake.us, etc.
+            let tab = await findTabByKeyword(keyword);
+
+            if (!tab) {
+                console.log(`No tab found for ${expectedType}`);
+                updateStatusTick(expectedType, false);
+                return;
+            }
 
             const results = await chrome.scripting.executeScript({
                 target: { tabId: tab.id, allFrames: true },
@@ -178,44 +207,62 @@ document.addEventListener('DOMContentLoaded', () => {
                             foundData = res.result;
                             break;
                         }
-                        // Store as fallback
-                        if (!foundData) foundData = res.result;
+                        // Fallback check if type matches loosely
+                        if ((expectedType === 'polymarket' && res.result.type === 'polymarket') ||
+                            (expectedType === 'stack' && res.result.type === 'stack')) {
+                            foundData = res.result;
+                        }
                     }
                 }
             }
 
             if (!foundData) {
-                if (statusText) statusText.textContent = "No odds found.";
-                return;
+                statusText.textContent = `No ${expectedType} data found.`;
+                updateStatusTick(expectedType, false);
+            } else {
+                statusText.textContent = `Scraped ${foundData.odds.length} ${expectedType} odds.`;
+                updateStatusTick(expectedType, true);
+
+                // Send to background to process/store
+                chrome.runtime.sendMessage({
+                    action: "data_updated",
+                    data: foundData
+                });
+
+                // Also update local UI immediately?
+                // The background will process and we might need to fetch storage or rely on background to update us?
+                // popup usually listens to storage changes OR we can just reload table.
+                // Let's reload table after a short delay
+                setTimeout(updateUI, 500);
             }
 
-            // Verify type matches button if we found *some* data but maybe not the right one?
-            // Actually, let's look at what we found.
-            if (expectedType === 'polymarket' && foundData.type !== 'polymarket') {
-                if (statusText) statusText.textContent = `Found ${foundData.type} data, but expected Polymarket. Check tab?`;
-                return;
-            }
-            if (expectedType === 'stack' && foundData.type !== 'stack') {
-                if (statusText) statusText.textContent = `Found ${foundData.type} data, but expected Stake. Check tab?`;
-                return;
-            }
-
-            handleScrapedData(foundData);
-
-        } catch (e) {
-            console.error(e);
-            if (statusText) statusText.textContent = "Error: " + e.message;
+        } catch (err) {
+            console.error("Scan error:", err);
+            statusText.textContent = `Error scanning ${expectedType}`;
+            updateStatusTick(expectedType, false);
         }
     };
 
-    if (scanPolyBtn) scanPolyBtn.addEventListener('click', () => performScan('polymarket'));
-    if (scanStakeBtn) scanStakeBtn.addEventListener('click', () => performScan('stack'));
+    const scanAllBtn = document.getElementById('scanAllBtn');
+    if (scanAllBtn) {
+        scanAllBtn.addEventListener('click', async () => {
+            // Scan both in parallel or sequence
+            await performScan('polymarket');
+            await performScan('stack');
+            statusText.textContent = "Scan complete.";
+        });
+    }
 
-    // 3. Clear Button Handler
+    // 3. Reset / Clear Button Handler
     if (clearBtn) {
         clearBtn.addEventListener('click', () => {
             chrome.storage.local.remove(['polymarketData', 'stackData'], () => {
                 if (statusText) statusText.textContent = "Data cleared.";
+                // Reset UI Ticks
+                updateStatusTick('polymarket', false);
+                updateStatusTick('stack', false);
+                document.getElementById('polyTick').textContent = "⬜";
+                document.getElementById('stakeTick').textContent = "⬜";
                 updateUI();
             });
         });
@@ -302,7 +349,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
                 if (match) return match;
 
-                // 2. Try Abbreviation/Token Matching (e.g. WSH vs Washington)
+                // 2. Normalized Strict Match (Ignore punctuation/spaces)
+                // "Gen.G" -> "GENG" vs "GENG" -> "GENG"
+                // "PR1 Paper Rex" -> "PR1PAPERREX" vs "Paper Rex" -> "PAPERREX"
+                const normalize = (s) => s.replace(/[^A-Z0-9]/g, '');
+                const norm1 = normalize(n1);
+
+                if (norm1.length > 3) {
+                    let normMatch = list.find(x => {
+                        const norm2 = normalize(x.team.toUpperCase());
+                        return norm2.length > 3 && (norm1.includes(norm2) || norm2.includes(norm1));
+                    });
+                    if (normMatch) return normMatch;
+                }
+
+                // 3. Try Abbreviation/Token Matching (e.g. WSH vs Washington)
                 // Score all candidates
                 let best = null;
                 let bestScore = 0;
@@ -313,6 +374,16 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     // A. Prefix Match (DET vs DETROIT)
                     if (n2.startsWith(n1) || n1.startsWith(n2)) score += 50;
+
+                    // NEW: Handles "EPG1" vs "EPG"
+                    // If one string's first token strictly contains the other's first token
+                    const t1_first = n1.split(' ')[0];
+                    const t2_first = n2.split(' ')[0];
+                    if (t1_first.length >= 3 && t2_first.length >= 3) {
+                        if (t1_first !== t2_first && (t1_first.includes(t2_first) || t2_first.includes(t1_first))) {
+                            score += 45;
+                        }
+                    }
 
                     // B. Subsequence Match for short tickers (e.g. WSH -> WaSHington)
                     // Only if one is short (< 4 chars)
