@@ -1,8 +1,8 @@
 {
     "manifest_version": 3,
-    "name": "Cent to Decimal Converter",
+    "name": "Cent Arbitrage Bot",
     "version": "1.0",
-    "description": "Converts cent odds (e.g., 21¢) to decimal odds (e.g., 4.76).",
+    "description": "Scans Polymarket & Stake for arbitrage opportunities, with Telegram alerts and auto-trade simulation.",
     "permissions": [
         "activeTab",
         "scripting",

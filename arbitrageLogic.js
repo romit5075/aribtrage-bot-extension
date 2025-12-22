@@ -23,6 +23,39 @@ class ArbitrageCalculator {
     }
 
     /**
+     * Calculates stake distribution for a given total investment amount.
+     * @param {number} totalInvestment - Total amount to invest (e.g., $100).
+     * @param {number} odds1 - Decimal odds for outcome 1.
+     * @param {number} odds2 - Decimal odds for outcome 2.
+     * @returns {Object} { stake1, stake2, riskFreeProfit, roi }
+     */
+    static calculateStakes(totalInvestment, odds1, odds2) {
+        if (!totalInvestment || !odds1 || !odds2) return null;
+
+        const ip1 = 1 / odds1;
+        const ip2 = 1 / odds2;
+        const marketMargin = ip1 + ip2;
+
+        // Stake Allocation
+        const s1 = (totalInvestment * ip1) / marketMargin;
+        const s2 = (totalInvestment * ip2) / marketMargin;
+
+        // Expected Return (should be equal for both if perfect arb)
+        const return1 = s1 * odds1;
+        // const return2 = s2 * odds2; // should be roughly same
+
+        const profit = return1 - totalInvestment;
+
+        return {
+            stake1: parseFloat(s1.toFixed(2)),
+            stake2: parseFloat(s2.toFixed(2)),
+            totalReturn: parseFloat(return1.toFixed(2)),
+            profit: parseFloat(profit.toFixed(2)),
+            roi: ((profit / totalInvestment) * 100).toFixed(2) + '%'
+        };
+    }
+
+    /**
      * Scans for arbitrage between two datasets (Poly vs Stake/Stack)
      * @param {Array} polyData - Array of objects { team, odds, ... }
      * @param {Array} stackData - Array of objects { team, odds, ... }

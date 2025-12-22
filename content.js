@@ -57,14 +57,28 @@ function scrapePageData() {
                 if (match) team = match[1];
 
                 // Improved Name Extraction (Same as popup fallback)
+                // Fix for "33 33" -> "33"
                 if (team === 'UNKNOWN' || team.length <= 4) {
                     const linkEl = btn.closest('a');
                     if (linkEl) {
                         const fullText = linkEl.textContent.trim().toUpperCase();
-                        const btnText = btn.textContent.trim().toUpperCase();
+                        let btnText = btn.textContent.trim().toUpperCase();
+
+                        // If btnText is "33 79¢ 1.27", we only want to remove odds
+                        // Clean fullText: "33 33" -> we want "33"
+                        // Or if page says "33 33", it's the name twice?
+
                         let cleanName = fullText.replace(btnText, '').trim();
+                        // Remove odds if leaked
                         cleanName = cleanName.replace(/\d+\s*¢/g, '').replace(/(\d+\.\d{2})/g, '').trim();
-                        if (cleanName.length > 3) {
+
+                        // Special case for repeated numeric names "33 33"
+                        const tokens = cleanName.split(' ');
+                        if (tokens.length === 2 && tokens[0] === tokens[1]) {
+                            cleanName = tokens[0];
+                        }
+
+                        if (cleanName.length >= 1) { // Allow short names like "33"
                             team = cleanName;
                         }
                     }
@@ -160,30 +174,53 @@ function scrapePageData() {
     return data;
 }
 
-// --- Live Monitoring ---
+// --- Live Monitoring (Ultra Low Latency) ---
 let liveObserver = null;
-let liveDebounce = null;
+let liveRafId = null;
+let isScanPending = false;
 
 function startLiveMonitoring() {
     stopLiveMonitoring(); // reset
-    console.log("Starting Live Monitoring...");
+    console.log("Starting Real-Time Monitoring (rAF)...");
 
-    // Initial Sent
-    chrome.runtime.sendMessage({ action: "live_data_upate", data: scrapePageData() });
-
-    liveObserver = new MutationObserver((mutations) => {
-        // Debounce updates
-        if (liveDebounce) clearTimeout(liveDebounce);
-        liveDebounce = setTimeout(() => {
-            const data = scrapePageData();
-            if (data.odds.length > 0) {
-                chrome.runtime.sendMessage({ action: "live_data_update", data: data });
+    const pushUpdate = () => {
+        isScanPending = false;
+        const data = scrapePageData();
+        if (data.odds.length > 0) {
+            try {
+                chrome.runtime.sendMessage({ action: "live_data_update", data: data }, (response) => {
+                    if (chrome.runtime.lastError) { }
+                });
+            } catch (err) {
+                stopLiveMonitoring();
             }
-        }, 500); // 500ms debounce
+        }
+    };
+
+    // Initial Push
+    pushUpdate();
+
+    // 1. Mutation Observer triggers a frame request
+    liveObserver = new MutationObserver((mutations) => {
+        // Log mutation types to debug what we are seeing
+        // const types = mutations.map(m => m.type);
+        // console.log("Mutations:", types);
+
+        if (!isScanPending) {
+            isScanPending = true;
+            liveRafId = requestAnimationFrame(pushUpdate);
+        }
     });
 
-    // Observe body for subtree mods
-    liveObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+    // Observe everything, including characterData for text updates
+    // IMPORTANT: subtree: true is required to see deep changes
+    liveObserver.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        characterData: true,
+        characterDataOldValue: false
+    });
 }
 
 function stopLiveMonitoring() {
@@ -191,7 +228,11 @@ function stopLiveMonitoring() {
         liveObserver.disconnect();
         liveObserver = null;
     }
-    if (liveDebounce) clearTimeout(liveDebounce);
+    if (liveRafId) {
+        cancelAnimationFrame(liveRafId);
+        liveRafId = null;
+    }
+    isScanPending = false;
 }
 
 // Handler
@@ -252,196 +293,177 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === "click_bet_button") {
-        sendResponse({ status: "received" }); // CHANGE: Immediate response to stop background retries
+        sendResponse({ status: "received" });
 
         const targetTeam = request.team ? request.team.toUpperCase() : null;
         const targetId = request.id;
-        let clicked = false;
+        const expectedOdds = parseFloat(request.expectedOdds); // The decimal odds we want
+        const retryLimit = request.retryLimit || 1; // Default from request or 1
+        const tolerance = 0.05; // increased tolerance slightly for small drifts
 
-        // Debug Counter
-        if (!window.autoClickCount) window.autoClickCount = 0;
-        window.autoClickCount++;
-        console.log(`%c[AutoClick] Request Received. Total Attempts: ${window.autoClickCount}`, "color: yellow; font-size: 14px; font-weight: bold;");
+        console.log(`[Auto] Target: ${targetTeam}, ID: ${targetId}, Expect: ${expectedOdds}, Amt: ${request.amount}`);
 
-        if (!targetTeam && !targetId) return;
-
-        console.log("Attempting to auto-click bet for:", targetTeam, "ID:", targetId);
-
-        // Helper to robustly click
-        // Helper to robustly click (Mainly for Poly/React)
-        const robustClick = (el) => {
-            console.log("--- ROBUST CLICK SEQUENCE START ---");
-            console.log("Target:", el);
-            el.scrollIntoView({ behavior: 'auto', block: 'center' });
-
-            const pOpts = {
-                bubbles: true, cancelable: true, view: window,
-                pointerId: 1, width: 1, height: 1, pressure: 0.5,
-                isPrimary: true
-            };
-
-            console.log("Dispatching: pointerdown");
-            el.dispatchEvent(new PointerEvent('pointerdown', pOpts));
-
-            console.log("Dispatching: mousedown");
-            el.dispatchEvent(new PointerEvent('mousedown', pOpts));
-
-            console.log("Dispatching: pointerup");
-            el.dispatchEvent(new PointerEvent('pointerup', pOpts));
-
-            console.log("Dispatching: mouseup");
-            el.dispatchEvent(new PointerEvent('mouseup', pOpts));
-
-            console.log("Executing: Native .click()");
-            el.click();
-
-            console.log("--- ROBUST CLICK SEQUENCE END ---");
-
-            // Visual
-            el.style.border = "4px solid red";
-            setTimeout(() => {
-                el.style.border = "";
-            }, 2000);
+        // Helper to extract numeric odds from text
+        const parseOddsFromText = (text) => {
+            // Polymarket: "59¢" -> 1.69
+            const cents = text.match(/(\d+)\s*¢/);
+            if (cents) return (100 / parseInt(cents[1])).toFixed(2);
+            // Stake: "1.85"
+            const dec = text.match(/(\d+\.\d+)/);
+            if (dec) return parseFloat(dec[1]);
+            return null;
         };
 
+        const checkAndClick = (attempts = 0) => {
+            // Use retryLimit from user settings (e.g. 5 retries)
+            // If retryLimit is small (e.g. 1), we don't want to loop forever.
+            // But we also have a max timeout safety.
 
+            // Logic: 
+            // If we match odds -> good.
+            // If we find button but odds mismatch -> consume 1 retry attempt.
+            // If we don't find button -> consume 1 retry attempt (maybe loading).
 
-        // 1. Try ID Match First
-        if (targetId) {
-            const exactBtn = document.getElementById(targetId);
-            if (exactBtn) {
-                console.log("Found Button by ID");
-                robustClick(exactBtn);
-                clicked = true;
-                // fall through to auto-fill
+            if (attempts >= retryLimit) {
+                console.warn(`[Auto] Max retries (${retryLimit}) reached.`);
+                // If we found the button but odds were wrong, alert user.
+                // If we never found button, maybe just log.
+                alert(`Auto-Bet Stopped: Odds mismatch or Element not found after ${retryLimit} retries.`);
+                return;
             }
-        }
 
-        // 2. Try Poly Buttons (Text Match)
-        if (!clicked) {
-            const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+            let found = false;
 
-            polyButtons.forEach(btn => {
-                if (clicked) return;
-                // Robust check using same logic as scraper
-                let team = 'UNKNOWN';
-                const teamNode = btn.querySelector('.opacity-70');
-                if (teamNode) {
-                    team = teamNode.textContent.trim().toUpperCase();
-                } else {
+            // --- POLYMARKET CHECK ---
+            if (!found) {
+                const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+                for (const btn of polyButtons) {
                     const txt = btn.textContent.trim().toUpperCase();
-                    const match = txt.match(/^([A-Z]{3})/);
-                    if (match) team = match[1];
-                    else team = txt;
+
+                    // Match Team
+                    let isMatch = false;
+                    if (targetId && btn.id === targetId) isMatch = true;
+                    else if (targetTeam && (txt.includes(targetTeam) || targetTeam.includes(txt.split(' ')[0]))) isMatch = true;
+
+                    if (isMatch) {
+                        // Match Odds
+                        const btnText = btn.innerText; // innerText often contains the 59¢ part
+                        const currentOdds = parseOddsFromText(btnText);
+
+                        // Poly uses inverse price, so strict decimal check might be tricky due to rounding.
+                        // Let's trust if we found the button and odds are "close enough" or if expected is null
+                        if (currentOdds) {
+                            const diff = Math.abs(currentOdds - expectedOdds);
+                            if (diff > tolerance && expectedOdds) {
+                                console.log(`[Auto] Poly Odds mismatch. Saw ${currentOdds}, Want ${expectedOdds}. Retrying...`);
+                                setTimeout(() => checkAndClick(attempts + 1), 500);
+                                return; // Retry loop
+                            }
+                        }
+
+                        // Found & Valid!
+                        console.log("[Auto] Poly Match Found. Clicking...");
+                        robustClick(btn);
+                        fillPolySlip(request.amount);
+                        found = true;
+                        break;
+                    }
                 }
+            }
 
-                if (team === targetTeam || (targetTeam && (team.includes(targetTeam) || targetTeam.includes(team)))) {
-                    console.log("Found Poly Button by Text match:", team);
-                    robustClick(btn);
-                    clicked = true;
-                }
-            });
-        }
+            // --- STAKE CHECK ---
+            if (!found) {
+                const stackItems = document.querySelectorAll('.outcome-content');
+                for (const item of stackItems) {
+                    const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
+                    if (nameEl) {
+                        const team = nameEl.textContent.trim().toUpperCase();
+                        if (team === targetTeam || (targetTeam && team.includes(targetTeam))) {
+                            // Check Odds
+                            // User says: <span ... data-ds-text="true">1.85</span>
+                            // Often inside [data-testid="fixture-odds"]
+                            const oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
+                            let currentOdds = null;
+                            if (oddsContainer) currentOdds = parseOddsFromText(oddsContainer.textContent);
 
-        // ---- Auto-Fill Polymarket (if clicked) ----
-        if (clicked && !document.querySelector('.outcome-content')) { // Ensure we are on Poly (outcome-content is Stake)
-            const attemptFillPoly = (attempts = 0) => {
-                if (attempts > 20) return;
-
-                // Selector based on User provided HTML: placeholder="$0" is distinctive for the amount input
-                const input = document.querySelector('input[placeholder="$0"]');
-
-                // Button: User said "Deposit", provided HTML showing class "trading-button" and data-color="blue"
-                // We'll look for the primary blue action button in the sidebar/modal
-                const actionBtn = document.querySelector('button[data-color="blue"]');
-
-                if (input && actionBtn) {
-                    console.log("Found Poly Bet Slip Inputs");
-
-                    // 1. Enter Amount "0.01" (React Native Setter)
-                    input.focus();
-                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                    nativeInputValueSetter.call(input, "0.01");
-
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-
-                    // 2. Click Action Button (Deposit/Buy)
-                    setTimeout(() => {
-                        console.log("Clicking Action Button on Poly...");
-                        robustClick(actionBtn); // Use robust click for Poly buttons
-                    }, 1000);
-                } else {
-                    setTimeout(() => attemptFillPoly(attempts + 1), 500);
-                }
-            };
-            attemptFillPoly();
-        }
-
-        // 3. Try Stake Buttons
-        if (!clicked) {
-            const stackItems = document.querySelectorAll('.outcome-content');
-            stackItems.forEach(item => {
-                if (clicked) return;
-                const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
-                if (nameEl) {
-                    const team = nameEl.textContent.trim().toUpperCase();
-                    if (team === targetTeam || team.includes(targetTeam) || targetTeam.includes(team)) {
-                        const btn = item.closest('button');
-                        if (btn) {
-                            console.log("Found Stake Button, Clicking:", btn);
-                            // Stake only needs native click. Pointer events might cause double trigger.
-                            btn.scrollIntoView({ behavior: 'auto', block: 'center' });
-                            btn.click();
-
-                            clicked = true;
-                            // Add visual feedback
-                            btn.style.border = "3px solid red";
-                            setTimeout(() => btn.style.border = "", 2000);
-
-                            // ---- Auto-Fill Stake Bet Slip ----
-                            const attemptFillStake = (attempts = 0) => {
-                                if (attempts > 20) return; // Stop after 10s
-
-                                const input = document.querySelector('input[data-testid="input-bet-amount"]');
-                                const placeBtn = document.querySelector('button[data-testid="betSlip-place-bets-button"]');
-
-                                if (input && placeBtn) {
-                                    console.log("Found Stake Bet Slip Inputs");
-
-                                    // 1. Enter Amount "0.01" (Simulate Typing)
-                                    input.focus();
-                                    // Native value setter for React inputs
-                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                                    nativeInputValueSetter.call(input, "0.01");
-
-                                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                                    input.dispatchEvent(new Event('change', { bubbles: true }));
-
-                                    // 2. Click Place Bet (Delay slightly to let validation happen)
-                                    setTimeout(() => {
-                                        if (!placeBtn.disabled) {
-                                            console.log("Clicking 'Place Bet' on Stake...");
-                                            placeBtn.click();
-                                        } else {
-                                            console.log("Place Bet button is disabled (Login/Funds?) -> Highlighting it");
-                                            placeBtn.style.border = "2px solid red";
-                                        }
-                                    }, 1000);
-
-                                } else {
-                                    // Retry looking for sidebar
-                                    setTimeout(() => attemptFillStake(attempts + 1), 500);
+                            if (currentOdds) {
+                                if (Math.abs(currentOdds - expectedOdds) > tolerance && expectedOdds) {
+                                    console.log(`[Auto] Stake Odds mismatch. Saw ${currentOdds}, Want ${expectedOdds}. Retrying...`);
+                                    setTimeout(() => checkAndClick(attempts + 1), 500);
+                                    return;
                                 }
-                            };
+                            }
 
-                            // Start looking for bet slip
-                            attemptFillStake();
+                            // Found & Valid!
+                            console.log("[Auto] Stake Match Found. Clicking...");
+                            const btn = item.closest('button');
+                            btn.scrollIntoView({ block: 'center' });
+                            btn.click();
+                            fillStakeSlip(request.amount);
+                            found = true;
+                            break;
                         }
                     }
                 }
-            });
-        }
+            }
+
+            if (!found) {
+                // If strictly looking for ID/Text and didn't find button at all -> retry (maybe loading)
+                setTimeout(() => checkAndClick(attempts + 1), 100);
+            }
+        };
+
+        const robustClick = (el) => {
+            el.scrollIntoView({ behavior: 'auto', block: 'center' });
+            el.click();
+            el.style.border = "4px solid #00e676";
+        };
+
+        const fillPolySlip = (amount) => {
+            const attempt = (n) => {
+                if (n > 20) return;
+                const input = document.querySelector('input[placeholder="$0"]');
+                const actionBtn = document.querySelector('button[data-color="blue"]');
+                if (input && actionBtn) {
+                    input.focus();
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                    nativeSetter.call(input, amount || "0.01");
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+                    setTimeout(() => {
+                        // Don't auto-click confirm yet? User asked to "click booked profit".
+                        // Usually we just highlight the button
+                        actionBtn.style.border = "4px solid #e91e63";
+                        // Send success message
+                        chrome.runtime.sendMessage({ action: "bet_placed_success", team: targetTeam, amount: amount, odds: expectedOdds });
+                    }, 500);
+                } else setTimeout(() => attempt(n + 1), 250);
+            };
+            attempt(0);
+        };
+
+        const fillStakeSlip = (amount) => {
+            const attempt = (n) => {
+                if (n > 20) return;
+                const input = document.querySelector('input[data-testid="input-bet-amount"]');
+                const placeBtn = document.querySelector('button[data-testid="betSlip-place-bets-button"]');
+                if (input && placeBtn) {
+                    input.focus();
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                    nativeSetter.call(input, amount || "0.01");
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+                    setTimeout(() => {
+                        placeBtn.style.border = "4px solid #e91e63"; // Highlight "Place Bet"
+                        // Send success message
+                        chrome.runtime.sendMessage({ action: "bet_placed_success", team: targetTeam, amount: amount, odds: expectedOdds });
+                    }, 500);
+                } else setTimeout(() => attempt(n + 1), 250);
+            };
+            attempt(0);
+        };
+
+        checkAndClick(0);
     }
 });
 

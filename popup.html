@@ -95,7 +95,20 @@
     style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #eee;">
     <h3 style="margin: 0;">Arb Scanner</h3>
     <div style="display: flex; align-items: center; gap: 8px;">
-      <span id="converterStatusLabel" style="font-size: 10px; font-weight: bold; color: #27ae60;">Convert</span>
+      <button id="settingsToggleBtn"
+        style="padding: 4px 8px; font-size: 10px; background-color: #95a5a6; display: flex; align-items: center; gap: 4px;">
+        <svg fill="#ffffff" height="10px" width="10px" version="1.1" xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 512 512">
+          <g>
+            <path
+              d="M487.4,315.7l-42.6-24.6c3.8-23.2,3.8-47,0-70.2l42.6-24.6c4.9-2.8,7.1-8.6,5.5-14l-24-83.2c-1.6-5.4-6.9-8.6-12.2-7.5l-47.9,9.6c-17.6-18.1-39-32.9-62.8-43.7l-12.7-47.2C331.8,4.9,326.6,1,321,1h-86c-5.6,0-10.8,3.8-12.3,9.3l-12.7,47.2c-23.8,10.8-45.2,25.6-62.8,43.7l-47.9-9.6c-5.4-1.1-10.6,2.1-12.2,7.5l-24,83.2c-1.6,5.4,0.6,11.2,5.5,14l42.6,24.6c-3.8,23.2-3.8,47,0,70.2l-42.6,24.6c-4.9,2.8-7.1,8.6-5.5,14l24,83.2c1.6,5.4,6.9,8.6,12.2,7.5l47.9-9.6c17.6,18.1,39,32.9,62.8,43.7l12.7,47.2c1.6,5.4,6.7,9.3,12.3,9.3h86c5.6,0,10.8-3.8,12.3-9.3l12.7-47.2c23.8-10.8,45.2-25.6,62.8-43.7l47.9,9.6c5.4,1.1,10.6-2.1,12.2-7.5l24-83.2C494.5,324.3,492.2,318.5,487.4,315.7z M256,364c-59.7,0-108-48.3-108-108s48.3-108,108-108s108,48.3,108,108S315.7,364,256,364z" />
+          </g>
+        </svg>
+        Settings
+      </button>
+
+      <span id="converterStatusLabel"
+        style="font-size: 10px; font-weight: bold; color: #27ae60; margin-left:5px;">Convert</span>
       <label class="switch" style="position: relative; display: inline-block; width: 28px; height: 16px;">
         <input type="checkbox" id="toggleConverter" checked>
         <span class="slider round"
@@ -103,23 +116,23 @@
       </label>
 
       <span id="hoverStatusLabel"
-        style="font-size: 10px; font-weight: bold; color: #27ae60; margin-left:10px;">Hover</span>
+        style="font-size: 10px; font-weight: bold; color: #27ae60; margin-left:5px;">Hover</span>
       <label class="switch" style="position: relative; display: inline-block; width: 28px; height: 16px;">
         <input type="checkbox" id="toggleHover" checked>
         <span class="slider round"
           style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px;"></span>
       </label>
 
-      <span id="strictStatusLabel" style="font-size: 10px; font-weight: bold; color: #95a5a6; margin-left:10px;">Strict
-        Name</span>
+      <span id="strictStatusLabel"
+        style="font-size: 10px; font-weight: bold; color: #95a5a6; margin-left:5px;">Strict</span>
       <label class="switch" style="position: relative; display: inline-block; width: 28px; height: 16px;">
         <input type="checkbox" id="toggleStrict">
         <span class="slider round"
           style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px;"></span>
       </label>
 
-      <span id="liveScanStatusLabel" style="font-size: 10px; font-weight: bold; color: #95a5a6; margin-left:10px;">Live
-        Scan</span>
+      <span id="liveScanStatusLabel"
+        style="font-size: 10px; font-weight: bold; color: #95a5a6; margin-left:5px;">Live</span>
       <label class="switch" style="position: relative; display: inline-block; width: 28px; height: 16px;">
         <input type="checkbox" id="toggleLiveScan">
         <span class="slider round"
@@ -128,6 +141,7 @@
     </div>
   </div>
 
+  <!-- ... slider styles ... -->
   <style>
     /* Slider thumb */
     .slider.round:before {
@@ -162,10 +176,14 @@
 
   <div style="display: flex; justify-content: space-around; font-size: 12px; margin-bottom: 10px; align-items: center;">
     <div id="polyStatusBox" style="display: flex; align-items: center; gap: 5px; opacity: 0.5;">
-      <span id="polyTick">⬜</span> Polymarket
+      <span id="polyTick"><svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="#bdc3c7" stroke-width="2" />
+        </svg></span> Polymarket
     </div>
     <div id="stakeStatusBox" style="display: flex; align-items: center; gap: 5px; opacity: 0.5;">
-      <span id="stakeTick">⬜</span> Stake
+      <span id="stakeTick"><svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <circle cx="12" cy="12" r="10" stroke="#bdc3c7" stroke-width="2" />
+        </svg></span> Stake
     </div>
   </div>
 
@@ -182,10 +200,64 @@
 
   <div id="status" style="margin: 10px 0; font-size: 12px; color: #7f8c8d;">Ready to scan...</div>
 
+  <div id="settingsContainer"
+    style="display: none; margin-bottom: 10px; border: 1px solid #ddd; padding: 10px; background: #fff; border-radius: 5px;">
+    <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid #eee; padding-bottom: 5px;">Bot Settings</h4>
+
+    <label style="display:block; text-align:left; font-size:11px; margin-bottom:5px;">
+      Telegram Bot Token:
+      <input type="password" id="tgBotToken" style="width: 100%; box-sizing: border-box;">
+    </label>
+
+    <label style="display:block; text-align:left; font-size:11px; margin-bottom:5px;">
+      Chat ID:
+      <input type="text" id="tgChatId" style="width: 100%; box-sizing: border-box;">
+    </label>
+
+    <label style="display:block; text-align:left; font-size:11px; margin-bottom:5px;">
+      <div style="display: flex; gap: 10px;">
+        <div style="flex: 1;">
+          Max Payroll ($):
+          <input type="number" id="maxPayroll" style="width: 100%; box-sizing: border-box;" placeholder="1000">
+        </div>
+        <div style="flex: 1;">
+          Stake Amount ($):
+          <input type="number" id="stakeAmount" style="width: 100%; box-sizing: border-box;" placeholder="100">
+        </div>
+        <div style="flex: 1;">
+          Max Trades #:
+          <input type="number" id="maxTrades" style="width: 100%; box-sizing: border-box;" placeholder="1">
+        </div>
+        <div style="flex: 1;">
+          Retry Count:
+          <input type="number" id="retryCount" style="width: 100%; box-sizing: border-box;" placeholder="1">
+        </div>
+      </div>
+    </label>
+    <div
+      style="text-align:left; font-size:12px; margin-bottom:10px; display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <label style="margin-right: 15px;">
+          <input type="checkbox" id="autoTradeToggle"> Auto-Trade (Sim)
+        </label>
+        <label>
+          <input type="checkbox" id="tgTradeToggle"> Telegram Notify
+        </label>
+      </div>
+      <button id="testTgBtn"
+        style="background-color: #3498db; padding: 5px 10px; font-size: 11px; width: auto; border-radius: 4px;">Test
+        Msg</button>
+    </div>
+
+    <button id="saveSettingsBtn" style="width: 100%; background-color: #27ae60;">Save Settings & Reset Blocked
+      Funds</button>
+  </div>
+
   <div id="resultsArea">
     <!-- Tables will be injected here -->
   </div>
 
+  <script src="arbitrageLogic.js"></script>
   <script src="popup.js"></script>
 </body>
 

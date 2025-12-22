@@ -7,7 +7,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Bet Button Handler
     resultsArea.addEventListener('click', (e) => {
-        if (e.target.classList.contains('bet-btn')) {
+        if (e.target.classList.contains('debug-btn')) {
+            const dataStr = e.target.getAttribute('data-debug');
+            if (dataStr) {
+                const data = JSON.parse(dataStr);
+                chrome.storage.local.get(['tgBotToken', 'tgChatId'], (res) => {
+                    const token = res.tgBotToken;
+                    const chat = res.tgChatId;
+                    if (token && chat) {
+                        const msg = `🐞 *Debug Report*\n\n` +
+                            `Poly: ${data.home.team} (${data.home.odds}) vs ${data.away.team} (${data.away.odds})\n` +
+                            `Stake: ${data.stakeHome.team} (${data.stakeHome.odds}) vs ${data.stakeAway.team} (${data.stakeAway.odds})`;
+                        const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chat}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`;
+                        fetch(url).then(() => alert("Debug sent to TG!")).catch(e => alert("Failed to send: " + e));
+                    } else {
+                        alert("Configure TG settings first.");
+                    }
+                });
+            }
+        }
+        else if (e.target.closest('.force-bet-btn')) { // Use closest for SVG clicks
+            const btn = e.target.closest('.force-bet-btn');
+            const matchData = JSON.parse(btn.getAttribute('data-match'));
+            if (matchData) {
+                if (confirm("Take manual simulated trade for " + matchData.match + "?")) {
+                    chrome.runtime.sendMessage({ action: "force_trade", op: matchData }, (res) => {
+                        if (res && res.success) {
+                            alert(`Trade Taken! Blocked: $${res.blocked}`);
+                        }
+                    });
+                }
+            }
+        }
+        else if (e.target.classList.contains('bet-btn')) {
             const url = e.target.getAttribute('data-link');
             // Extract team name from button text "P: CHA" -> "CHA"
             const text = e.target.textContent;
@@ -16,15 +48,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Extract ID
             const btnId = e.target.getAttribute('data-id');
+            const stakeAmt = e.target.getAttribute('data-stake');
+            const expectedOdds = e.target.getAttribute('data-odds');
 
             if (url && url !== '#' && url !== 'undefined') {
-                // chrome.tabs.create({ url: url });
-                // New Flow: Send to background to open AND click
                 chrome.runtime.sendMessage({
                     action: "open_and_click",
                     url: url,
                     team: team,
-                    id: btnId
+                    id: btnId,
+                    amount: stakeAmt,
+                    expectedOdds: expectedOdds
                 });
             } else {
                 alert("Link not available. Please rescan.");
@@ -34,6 +68,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 1. Load initial state
     updateUI();
+
+    // 1.5 Auto-Refresh UI on Storage Change (Live Monitoring)
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+        if (namespace === 'local') {
+            if (changes.polymarketData || changes.stackData || changes.tradeCount || changes.blockedFunds) {
+                updateUI();
+            }
+        }
+    });
 
     const toggleConverter = document.getElementById('toggleConverter');
     const converterStatusLabel = document.getElementById('converterStatusLabel');
@@ -448,9 +491,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateUI() {
-        chrome.storage.local.get(['polymarketData', 'stackData'], (result) => {
+        chrome.storage.local.get(['polymarketData', 'stackData', 'strictMatch', 'stakeAmount'], (result) => {
             const poly = result.polymarketData;
             const stack = result.stackData;
+            const stakeAmt = result.stakeAmount || 100; // Default 100 if not set
 
             let html = '';
 
@@ -458,25 +502,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 html = '<p>No data collected.</p>';
             } else {
                 if (poly) {
-                    html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams</p>`;
-                    // console.log("Poly Data:", poly.odds.map(o => o.team)); 
+                    html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams <span style="margin-left:10px; color:#3498db;">Updated: ${new Date().toLocaleTimeString()}</span></p>`;
                 }
                 if (stack) {
                     html += `<p style="font-size:10px; color:#aaa;">Stake Data: ${stack.odds.length} teams</p>`;
-                    console.log("Stake Raw Data Teams:", stack.odds.map(o => o.team));
                 }
 
                 if (poly && stack) {
                     // Get strict setting
                     const isStrict = result.strictMatch === true;
-                    html += generateArbitrageTable(poly.odds, stack.odds, isStrict);
+                    html += generateArbitrageTable(poly.odds, stack.odds, isStrict, stakeAmt);
                 }
             }
             if (resultsArea) resultsArea.innerHTML = html;
         });
     }
 
-    function generateArbitrageTable(polyOdds, stackOdds, strictMatch) {
+    function generateArbitrageTable(polyOdds, stackOdds, strictMatch, stakeAmount) {
         // Goal Table Format:
         // Match (e.g. HOU-DEN) | Poly HOU | Poly DEN | Stake HOU | Stake DEN | Arb % (P-HOU/S-DEN) | Arb % (P-DEN/S-HOU)
 
@@ -493,6 +535,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 .poly-btn { background-color: #29b6f6; }
                 .stake-btn { background-color: #00bfa5; }
                 .bet-btn:hover { opacity: 0.8; }
+                .stake-display { display: block; font-size: 9px; font-weight: bold; color: #27ae60; margin-top: 2px; }
             </style>
             <table>
                 <thead>
@@ -524,8 +567,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (match) return match;
 
                 // If strictMatch was false, but we found a clean strict match, return it.
-                // If strictMatch was true, we would have returned earlier.
-                // So, if we reach here and strictMatch is true, it means no exact match, so return null.
                 if (strictMatch) return null;
 
                 // 2. Fuzzy Match
@@ -536,36 +577,27 @@ document.addEventListener('DOMContentLoaded', () => {
                     const n2 = clean(item.team.toUpperCase());
                     let score = 0;
 
-                    // A. Exact Substring (Higher Confidence)
-                    if (n1.includes(n2) || n2.includes(n1)) {
-                        score += 60;
-                    }
+                    // A. Exact Substring
+                    if (n1.includes(n2) || n2.includes(n1)) score += 60;
 
-                    // B. Prefix Match (Restored)
-                    // "LNG LnG" vs "LNG Esports" -> Both start with "LNG"
-                    if (n1.split(' ')[0] === n2.split(' ')[0] && n1.split(' ')[0].length >= 3) {
-                        score += 30;
-                    }
+                    // B. Prefix Match
+                    if (n1.split(' ')[0] === n2.split(' ')[0] && n1.split(' ')[0].length >= 3) score += 30;
 
-                    // C. Token Overlap (Refined)
-                    // Remove duplicates in tokens: "LNG LNG" -> ["LNG"]
+                    // C. Token Overlap
                     const uniqueTokens = (str) => [...new Set(str.split(' ').filter(t => t.length > 2))];
                     const t1 = uniqueTokens(n1);
                     const t2 = uniqueTokens(n2);
-
                     let matches = 0;
                     let strongMatches = 0;
-
                     t1.forEach(token => {
                         if (t2.includes(token)) {
                             matches++;
                             if (token.length > 3) strongMatches++;
                         }
                     });
-
                     if (matches > 0) {
-                        score += (matches * 20); // Base points for any shared token
-                        if (strongMatches > 0) score += 20; // Bonus for explicit names
+                        score += (matches * 20);
+                        if (strongMatches > 0) score += 20;
                     }
 
                     // D. Ticker Handling
@@ -576,36 +608,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     };
                     const n1_noTick = removeTicker(n1);
                     const n2_noTick = removeTicker(n2);
-
                     if (n1 !== n1_noTick || n2 !== n2_noTick) {
                         if (n1_noTick === n2_noTick || n1_noTick.includes(n2_noTick) || n2_noTick.includes(n1_noTick)) {
                             score += 45;
                         }
                     }
 
-                    // E. Subsequence / Acronym Match (Restored for BLG -> Bilibili Gaming)
+                    // E. Acronym
                     if (n1.length <= 4 || n2.length <= 4) {
                         const short = n1.length < n2.length ? n1 : n2;
                         const long = n1.length < n2.length ? n2 : n1;
-
-                        // Strict acronym check: ensure short is at least 2 chars
                         if (short.length >= 2) {
-                            let sIdx = 0;
-                            let lIdx = 0;
+                            let sIdx = 0, lIdx = 0;
                             while (sIdx < short.length && lIdx < long.length) {
-                                if (short[sIdx] === long[lIdx]) {
-                                    sIdx++;
-                                }
+                                if (short[sIdx] === long[lIdx]) sIdx++;
                                 lIdx++;
                             }
-                            if (sIdx === short.length) {
-                                score += 45;
-                            }
+                            if (sIdx === short.length) score += 45;
                         }
-                    }
-
-                    if (score > 30 || n1.includes('BILIBILI') || n1 === 'BLG' || n2 === 'BLG') {
-                        console.log(`Comparing '${n1}' vs '${n2}' -> Score: ${score}`);
                     }
 
                     if (score > bestScore) {
@@ -629,8 +649,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const stakeAway = findOdds(stackOdds, away.team);
 
             if (stakeHome && stakeAway) {
-                // ... (Existing Perfect Match Logic) ...
-                // Determine confidence if not strict match
+                // Determine confidence
                 let confidence = 100;
                 if (!strictMatch) {
                     if (home.team !== stakeHome.team) confidence -= 10;
@@ -643,7 +662,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     isSuspended(stakeHome.odds) || isSuspended(stakeAway.odds)) {
                     // Suspended Row
                     const formatOdds = (val) => isSuspended(val) ? '-' : val;
-                    // Truncate function for buttons
                     const trunc = (str) => str.length > 4 ? str.substring(0, 4) : str;
 
                     tableHtml += `
@@ -667,13 +685,44 @@ document.addEventListener('DOMContentLoaded', () => {
                         </tr>`;
                 } else {
                     // Active Match Row
-                    const arb1 = calculateArb(home.odds, stakeAway.odds);
-                    const arb2 = calculateArb(away.odds, stakeHome.odds);
+                    const arb1 = ArbitrageCalculator.calculate(home.odds, stakeAway.odds);
+                    const arb2 = ArbitrageCalculator.calculate(away.odds, stakeHome.odds);
 
-                    // Highlight colors
-                    const highlightStyle = "background-color: #ffe0b2; color: #e65100; font-weight: bold;"; // Light orange bg, dark orange text
-
+                    const highlightStyle = "background-color: #ffe0b2; color: #e65100; font-weight: bold;";
                     const trunc = (str) => str.length > 4 ? str.substring(0, 4) : str;
+
+                    // Stake Calculation Logic
+                    let s1_home_val = 0, s1_away_val = 0, s2_home_val = 0, s2_away_val = 0;
+                    let s1_home_disp = '', s1_away_disp = '', s2_home_disp = '', s2_away_disp = '';
+
+                    if (arb1.isArb) {
+                        const split = ArbitrageCalculator.calculateStakes(stakeAmount, home.odds, stakeAway.odds);
+                        if (split) {
+                            s1_home_val = split.stake1;
+                            s1_away_val = split.stake2;
+                            s1_home_disp = `<span class="stake-display">$${split.stake1}</span>`;
+                            s1_away_disp = `<span class="stake-display">$${split.stake2}</span>`;
+                        }
+                    }
+
+                    if (arb2.isArb) {
+                        const split = ArbitrageCalculator.calculateStakes(stakeAmount, away.odds, stakeHome.odds);
+                        if (split) {
+                            s2_home_val = split.stake1;
+                            s2_away_val = split.stake2;
+                            s2_home_disp = `<span class="stake-display">$${split.stake1}</span>`;
+                            s2_away_disp = `<span class="stake-display">$${split.stake2}</span>`;
+                        }
+                    }
+
+                    // Button Styles
+                    // Arb 1 Winner Pair: Poly Home + Stake Away
+                    const styleP_Home = arb1.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
+                    const styleS_Away = arb1.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
+
+                    // Arb 2 Winner Pair: Poly Away + Stake Home
+                    const styleP_Away = arb2.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
+                    const styleS_Home = arb2.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
 
                     tableHtml += `
                         <tr>
@@ -683,27 +732,47 @@ document.addEventListener('DOMContentLoaded', () => {
                             </td>
                             
                             <!-- Poly Home (Arb 1 Winner?) -->
-                            <td style="${arb1.profit > 0 ? highlightStyle : ''}">${home.odds}</td>
+                            <td style="${arb1.profit > 0 ? highlightStyle : ''}">
+                                ${home.odds}
+                                ${s1_home_disp}
+                            </td>
                             
                             <!-- Poly Away (Arb 2 Winner?) -->
-                            <td style="${arb2.profit > 0 ? highlightStyle : ''}">${away.odds}</td>
+                            <td style="${arb2.profit > 0 ? highlightStyle : ''}">
+                                ${away.odds}
+                                ${s2_home_disp}
+                            </td>
                             
                             <!-- Stake Home (Arb 2 Winner?) -->
-                            <td style="${arb2.profit > 0 ? highlightStyle : ''}">${stakeHome.odds}</td>
+                            <td style="${arb2.profit > 0 ? highlightStyle : ''}">
+                                ${stakeHome.odds}
+                                ${s2_away_disp}
+                            </td>
                             
                             <!-- Stake Away (Arb 1 Winner?) -->
-                            <td style="${arb1.profit > 0 ? highlightStyle : ''}">${stakeAway.odds}</td>
+                            <td style="${arb1.profit > 0 ? highlightStyle : ''}">
+                                ${stakeAway.odds}
+                                ${s1_away_disp}
+                            </td>
                             
-                            <td class="${arb1.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb1.profit}%</td>
-                            <td class="${arb2.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb2.profit}%</td>
-                             <td style="text-align: left; min-width: 120px;">
-                                <div style="margin-bottom:3px">
-                                    <button class="bet-btn poly-btn" style="${arb1.profit > 0 ? 'border:1px solid red' : ''}" data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
-                                    <button class="bet-btn poly-btn" style="${arb2.profit > 0 ? 'border:1px solid red' : ''}" data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
+                            <td class="${arb1.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb1.profit.toFixed(2)}%</td>
+                            <td class="${arb2.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb2.profit.toFixed(2)}%</td>
+                             <td style="text-align: left; min-width: 140px;">
+                                <div style="margin-bottom:3px; display:flex; gap:2px;">
+                                    <button class="bet-btn poly-btn" style="${styleP_Home}" data-link="${home.link}" data-id="${home.id}" data-stake="${s1_home_val}" data-odds="${home.odds}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn poly-btn" style="${styleP_Away}" data-link="${away.link}" data-id="${away.id}" data-stake="${s2_home_val}" data-odds="${away.odds}">P: ${trunc(away.team)}</button>
                                 </div>
-                                <div>
-                                    <button class="bet-btn stake-btn" style="${arb2.profit > 0 ? 'border:1px solid red' : ''}" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
-                                    <button class="bet-btn stake-btn" style="${arb1.profit > 0 ? 'border:1px solid red' : ''}" data-link="${stakeAway.link}">S: ${trunc(stakeAway.team)}</button>
+                                <div style="display:flex; gap:2px;">
+                                    <button class="bet-btn stake-btn" style="${styleS_Home}" data-link="${stakeHome.link}" data-stake="${s2_away_val}" data-odds="${stakeHome.odds}">S: ${trunc(stakeHome.team)}</button>
+                                    <button class="bet-btn stake-btn" style="${styleS_Away}" data-link="${stakeAway.link}" data-stake="${s1_away_val}" data-odds="${stakeAway.odds}">S: ${trunc(stakeAway.team)}</button>
+                                </div>
+                                <div style="margin-top:4px; text-align:right;">
+                                    <button class="debug-btn" data-debug='${JSON.stringify({ home, away, stakeHome, stakeAway })}' style="border:none; background:none; cursor:pointer;" title="Send to TG Debug">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="#333" xmlns="http://www.w3.org/2000/svg"><path d="M19 10C19.5523 10 20 10.4477 20 11V13C20 13.5523 19.5523 14 19 14H17V16C17 18.7614 14.7614 21 12 21C9.23858 21 7 18.7614 7 16V14H5C4.44772 14 4 13.5523 4 13V11C4 10.4477 4.44772 10 5 10H7V9C7 7.15178 8.00693 5.51862 9.5 4.60555C9.5 3.39445 10.5 2 12 2C13.5 2 14.5 3.39445 14.5 4.60555C15.9931 5.51862 17 7.15178 17 9V10H19ZM9 10V16C9 17.6569 10.3431 19 12 19C13.6569 19 15 17.6569 15 16V10H9Z" fill="#7f8c8d"/></svg>
+                                    </button>
+                                    <button class="force-bet-btn" data-arb='${JSON.stringify(arb1)}' data-match='${JSON.stringify({ match: home.team + " vs " + away.team, betOn: home.team + " (Poly) / " + away.team + " (Stack)", odds: [home.odds, stakeAway.odds] })}' style="border:none; background:none; cursor:pointer; margin-left:5px;" title="Auto Bet (Simulate)">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#e67e22" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"></rect><circle cx="12" cy="5" r="2"></circle><path d="M12 7v4"></path><line x1="8" y1="16" x2="8" y2="16"></line><line x1="16" y1="16" x2="16" y2="16"></line></svg>
+                                    </button>
                                 </div>
                             </td>
                         </tr>`;
@@ -711,18 +780,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             } else {
                 // PARTIAL or NO MATCH
-                // Use dashed placeholders if Stake missing
+                // ... (Keep existing partial logic)
                 const sH = stakeHome ? stakeHome.team : null;
                 const sA = stakeAway ? stakeAway.team : null;
-
-                const displayTeam = (polyName, stakeName) => {
-                    if (stakeName && stakeName !== polyName) return `${polyName}<br/><span style="font-size:9px;color:#aaa">(${stakeName})</span>`;
-                    return polyName;
-                };
-
                 const trunc = (str) => str && str.length > 4 ? str.substring(0, 4) : (str || '');
 
-                // Even if totally missing, show row to prove Poly scanned
                 tableHtml += `
                     <tr>
                         <td>
@@ -752,21 +814,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         tableHtml += '</tbody></table>';
         return tableHtml;
-    }
-
-    function calculateArb(odds1, odds2) {
-        // Safe check for suspended/string
-        if (typeof odds1 === 'string' || typeof odds2 === 'string') {
-            return { isArb: false, profit: 'Err' };
-        }
-        const ip1 = 1 / odds1;
-        const ip2 = 1 / odds2;
-        const totalIp = ip1 + ip2;
-        const profit = ((1 / totalIp) - 1) * 100;
-        return {
-            isArb: profit > 0,
-            profit: profit.toFixed(2)
-        };
     }
 
     function renderRow(name, o1, o2, res) {
@@ -912,4 +959,141 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
     });
+    // --- Settings Toggle Logic ---
+    const settingsToggleBtn = document.getElementById('settingsToggleBtn');
+    const settingsContainer = document.getElementById('settingsContainer');
+
+    if (settingsToggleBtn && settingsContainer) {
+        settingsToggleBtn.addEventListener('click', () => {
+            const isHidden = settingsContainer.style.display === 'none';
+            settingsContainer.style.display = isHidden ? 'block' : 'none';
+            settingsToggleBtn.style.backgroundColor = isHidden ? '#7f8c8d' : '#95a5a6'; // feedback
+        });
+    }
+
+    // --- Settings Logic ---
+    const tgBotTokenInput = document.getElementById('tgBotToken');
+    const tgChatIdInput = document.getElementById('tgChatId');
+    const maxPayrollInput = document.getElementById('maxPayroll');
+    const stakeAmountInput = document.getElementById('stakeAmount');
+    const maxTradesInput = document.getElementById('maxTrades'); // New
+    const retryCountInput = document.getElementById('retryCount'); // New
+    const autoTradeToggle = document.getElementById('autoTradeToggle');
+    const tgTradeToggle = document.getElementById('tgTradeToggle');
+    const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+
+    const testTgBtn = document.getElementById('testTgBtn');
+
+    // Load Settings
+    chrome.storage.local.get([
+        'tgBotToken', 'tgChatId', 'maxPayroll', 'stakeAmount', 'maxTrades', 'retryCount',
+        'autoTradeEnabled', 'tgTradeEnabled'
+    ], (result) => {
+        if (result.tgBotToken) tgBotTokenInput.value = result.tgBotToken;
+        if (result.tgChatId) tgChatIdInput.value = result.tgChatId;
+        if (result.maxPayroll) maxPayrollInput.value = result.maxPayroll;
+        if (result.stakeAmount) stakeAmountInput.value = result.stakeAmount;
+        if (result.maxTrades) maxTradesInput.value = result.maxTrades;
+        retryCountInput.value = result.retryCount || 1; // Default 1
+        if (result.autoTradeEnabled) autoTradeToggle.checked = result.autoTradeEnabled;
+        if (result.tgTradeEnabled) tgTradeToggle.checked = result.tgTradeEnabled;
+    });
+
+    // Save Settings Handler
+    saveSettingsBtn.addEventListener('click', () => {
+        const settings = {
+            tgBotToken: tgBotTokenInput.value.trim(),
+            tgChatId: tgChatIdInput.value.trim(),
+            maxPayroll: parseFloat(maxPayrollInput.value) || 0,
+            stakeAmount: parseFloat(stakeAmountInput.value) || 0,
+            maxTrades: parseInt(maxTradesInput.value) || 0,
+            retryCount: parseInt(retryCountInput.value) || 1, // Default 1
+            autoTradeEnabled: autoTradeToggle.checked,
+            tgTradeEnabled: tgTradeToggle.checked,
+            blockedFunds: 0, // Reset blocked funds on save
+            tradeCount: 0 // Reset session trade count
+        };
+
+        chrome.storage.local.set(settings, () => {
+            const originalText = saveSettingsBtn.textContent;
+            saveSettingsBtn.textContent = "Saved & Reset!";
+            saveSettingsBtn.style.backgroundColor = "#2ecc71";
+            setTimeout(() => {
+                saveSettingsBtn.textContent = originalText;
+                saveSettingsBtn.style.backgroundColor = "#27ae60";
+            }, 1500);
+        });
+    });
+
+    // Test Telegram Button
+    if (testTgBtn) {
+        testTgBtn.addEventListener('click', () => {
+            const token = tgBotTokenInput.value.trim();
+            const chat = tgChatIdInput.value.trim();
+            if (!token || !chat) {
+                alert("Please enter Bot Token and Chat ID first.");
+                return;
+            }
+
+            const msg = "*Test Message* \nCent Arbitrage Bot is connected!";
+            const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chat}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`;
+
+            const originalText = testTgBtn.textContent;
+            testTgBtn.textContent = "Sending...";
+            testTgBtn.disabled = true;
+
+            fetch(url).then(r => r.json()).then(data => {
+                if (data.ok) {
+                    testTgBtn.textContent = "Sent!";
+                    testTgBtn.style.backgroundColor = "#27ae60";
+                } else {
+                    testTgBtn.textContent = "Error";
+                    testTgBtn.style.backgroundColor = "#e74c3c";
+                    alert("Telegram Error: " + (data.description || "Unknown error"));
+                }
+            }).catch(err => {
+                testTgBtn.textContent = "Failed";
+                testTgBtn.style.backgroundColor = "#e74c3c";
+                console.error(err);
+            }).finally(() => {
+                setTimeout(() => {
+                    testTgBtn.textContent = originalText;
+                    testTgBtn.style.backgroundColor = "#3498db";
+                    testTgBtn.disabled = false;
+                }, 2000);
+            });
+        });
+    }
+
+    // Save Settings
+    if (saveSettingsBtn) {
+        saveSettingsBtn.addEventListener('click', () => {
+            const settings = {
+                tgBotToken: tgBotTokenInput.value.trim(),
+                tgChatId: tgChatIdInput.value.trim(),
+                maxPayroll: parseFloat(maxPayrollInput.value) || 0,
+                stakeAmount: parseFloat(stakeAmountInput.value) || 0,
+                maxTrades: parseInt(maxTradesInput.value) || 0,
+                autoTradeEnabled: autoTradeToggle.checked,
+                tgTradeEnabled: tgTradeToggle.checked,
+                blockedFunds: 0, // Reset blocked funds
+                tradeCount: 0    // Reset trade count
+            };
+
+            chrome.storage.local.set(settings, () => {
+                const originalText = saveSettingsBtn.textContent;
+                saveSettingsBtn.textContent = "Saved! Funds & Count Reset.";
+                saveSettingsBtn.style.backgroundColor = "#27ae60"; // Green
+
+                setTimeout(() => {
+                    saveSettingsBtn.textContent = originalText;
+                    saveSettingsBtn.style.backgroundColor = "#3498db"; // Reset to original blue or similar
+                }, 1500);
+
+                // Update UI immediately (optional, but good for feedback)
+                updateUI();
+            });
+        });
+    }
+
 });

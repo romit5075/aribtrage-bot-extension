@@ -94,7 +94,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Helper to trigger click with retry
         const triggerClick = (tabId, retries = 3) => {
-            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id }, (response) => {
+            const amount = request.amount;
+            const expectedOdds = request.expectedOdds;
+            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id, amount: amount, expectedOdds: expectedOdds }, (response) => {
                 const err = chrome.runtime.lastError;
                 if (err) {
                     // Ignore "port closed" error as it usually means listener existed but closed (success-ish)
@@ -226,9 +228,22 @@ function checkAndRefresh(state) {
                     } else {
                         // Fallback text
                         const txt = btn.textContent.trim();
-                        // Heuristic: usually starts with team code if not separated
                         const match = txt.match(/^([A-Z]{3})/);
                         if (match) team = match[1];
+
+                        // Updated from Content Script Logic
+                        if (team === 'UNKNOWN' || team.length <= 4) {
+                            const linkEl = btn.closest('a');
+                            if (linkEl) {
+                                const fullText = linkEl.textContent.trim().toUpperCase();
+                                const btnText = btn.textContent.trim().toUpperCase();
+                                let cleanName = fullText.replace(btnText, '').trim();
+                                cleanName = cleanName.replace(/\d+\s*¢/g, '').replace(/(\d+\.\d{2})/g, '').trim();
+                                if (cleanName.length > 3) {
+                                    team = cleanName;
+                                }
+                            }
+                        }
                     }
 
                     // Extract Time from Poly (heuristic based on provided DOM structure not shown but inferred)
@@ -362,13 +377,13 @@ function checkAndRefresh(state) {
 }
 
 // 4. Data Processing
+// 4. Data Processing
 function handleNewData(newData) {
-    chrome.storage.local.get(['monitoringState', 'polymarketData', 'stackData', 'strictMatch'], (result) => {
-        // Verification: Only process if monitoring is active? 
-        // Or process anyway if data comes in? 
-        // Let's enforce monitoring active to avoid noise?
-        // Actually, if we get data, we should check it.
-
+    chrome.storage.local.get([
+        'monitoringState', 'polymarketData', 'stackData', 'strictMatch',
+        'tgBotToken', 'tgChatId', 'maxPayroll', 'stakeAmount',
+        'autoTradeEnabled', 'tgTradeEnabled', 'blockedFunds', 'arbHistory'
+    ], (result) => {
         let poly = result.polymarketData;
         let stack = result.stackData;
         const strictMatch = result.strictMatch === true;
@@ -387,21 +402,11 @@ function handleNewData(newData) {
 
             if (opportunities.length > 0) {
                 // Determine if we should notify
-                // If monitoring is active, definitely notify.
                 if (result.monitoringState && result.monitoringState.active) {
 
                     // 1. Prepare Highlight Targets
-                    // Extract the specific teams that are part of the winning bet
                     const targets = [];
                     opportunities.forEach(op => {
-                        // op.betOn is string "TeamA (Poly) / TeamB (Stack)"
-                        // We need to parse back or modify FindOpportunities to return structured data.
-                        // For now, let's look at the structure returned by ArbitrageCalculator.
-                        // actually wait, ArbitrageCalculator returns:
-                        // { match, betOn, odds, profit, type, ... }
-
-                        // Let's rely on betOn string parsing for now as valid quick fix
-                        // Format: "TeanA (Poly) / TeamB (Stack)"
                         const parts = op.betOn.split(' / ');
                         if (parts.length === 2) {
                             const p1 = parts[0].match(/(.*) \((.*)\)/);
@@ -412,14 +417,10 @@ function handleNewData(newData) {
                         }
                     });
 
-                    // 2. Broadcast Highlighting to likely tabs
-                    // We send to the monitored tab
+                    // 2. Broadcast Highlighting
                     if (targets.length > 0) {
                         try {
-                            // Send to monitored tab
                             chrome.tabs.sendMessage(result.monitoringState.tabId, { action: "highlight_odds", targets: targets });
-
-                            // Also try sending based on active tab query to be safe if ID changed
                             chrome.tabs.query({ active: true }, (tabs) => {
                                 tabs.forEach(t => {
                                     chrome.tabs.sendMessage(t.id, { action: "highlight_odds", targets: targets });
@@ -430,7 +431,7 @@ function handleNewData(newData) {
                         }
                     }
 
-                    // NOTIFY
+                    // NOTIFY (Browser)
                     chrome.notifications.create({
                         type: 'basic',
                         iconUrl: 'icon.png',
@@ -444,8 +445,183 @@ function handleNewData(newData) {
 
                     // LOG TO FILE
                     opportunities.forEach(op => ArbitrageLogger.logPositive(op));
+
+                    // --- TELEGRAM & AUTO-TRADE LOGIC ---
+                    const botToken = result.tgBotToken;
+                    const chatId = result.tgChatId;
+                    const autoTrade = result.autoTradeEnabled;
+                    const tgNotify = result.tgTradeEnabled;
+                    const maxPay = result.maxPayroll || 0;
+                    const stake = result.stakeAmount || 0;
+                    const maxTrades = result.maxTrades || 0; // New limit
+                    let blocked = result.blockedFunds || 0;
+                    let tradeCount = result.tradeCount || 0; // New counter
+                    let fundsUpdated = false;
+
+                    opportunities.forEach(op => {
+                        // Check if we should "take trade"
+                        if (autoTrade && stake > 0) {
+
+                            // Check Max Trades Limit
+                            if (maxTrades > 0 && tradeCount >= maxTrades) {
+                                console.log("Max trades limit reached. No more trades.");
+                                return; // Skip
+                            }
+
+                            // Valid Trade?
+                            if ((blocked + stake) <= maxPay) {
+                                // Check for duplicates (simple check: if we traded this match in last 60s)
+                                const recentTrade = result.arbHistory ? result.arbHistory.find(h =>
+                                    h.match === op.match &&
+                                    h.tradeTaken &&
+                                    (Date.now() - new Date(h.timestamp).getTime() < 60000)
+                                ) : false;
+
+                                if (!recentTrade) {
+                                    // EXECUTE SIMULATED TRADE
+                                    blocked += stake;
+                                    tradeCount += 1; // Increment count
+                                    fundsUpdated = true;
+
+                                    const calc = ArbitrageCalculator.calculateStakes(stake, op.odds[0], op.odds[1]);
+
+                                    // Log explicit trade
+                                    const tradeLog = {
+                                        ...op,
+                                        tradeTaken: true,
+                                        invested: stake,
+                                        expectedReturn: calc ? calc.totalReturn : 0,
+                                        timestamp: new Date().toISOString()
+                                    };
+                                    ArbitrageLogger.logPositive(tradeLog);
+
+                                    // Send Telegram
+                                    if (tgNotify && botToken && chatId) {
+                                        const cleanMatch = op.match.replace(/\*/g, '');
+                                        const cleanBet = op.betOn.replace(/\*/g, '');
+
+                                        const msg = `ARBITRAGE FOUND\n\n` +
+                                            `Match: ${cleanMatch}\n` +
+                                            `Bet: ${cleanBet}\n` +
+                                            `Odds: ${op.odds.join(' vs ')}\n` +
+                                            `\nInvested: $${stake} | Return: $${calc ? calc.totalReturn : '0'}\n` +
+                                            `Total Profit: $${calc ? calc.profit : '0'} (ROI: ${calc ? calc.roi : '0'}%)\n` +
+                                            `\nBlocked Funds: $${blocked} / $${maxPay}\n` +
+                                            `Trades Session: ${tradeCount} / ${maxTrades}`;
+
+                                        const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`;
+                                        fetch(url).catch(e => console.error("TG Send Fail", e));
+                                    }
+                                }
+                            } else {
+                                console.log("Insufficient Payroll for Auto-Trade");
+                                if (tgNotify && botToken && chatId) {
+                                    // Optional: Notify low funds? Maybe not to spam.
+                                }
+                            }
+                        } else if (tgNotify && botToken && chatId) {
+                            // Just Notify (No Trade) if not auto-trading but notification on?
+                            // User said: "do not take trade untill the auto-trade is on... whenever i also on telegram-trade which take fake trade and send message"
+                            // So if auto-trade OFF, maybe we don't send "Trade Taken" message. 
+                            // But user asked: "send telegram update... 1 thing if any positive arbitrage found then we have to take trade"
+                            // "right now we don;t have to take trade we just have to sent on tg hey i invest x and got x return"
+
+                            // Interpretation: ALWAYS send mock trade info if Telegram is ON, but only BLOCK funds if Auto-Trade is ON? 
+                            // Or, Auto-Trade enables the whole flow?
+                            // "do not take trade untill the auto-trade is on" -> means do not increment blocked funds.
+                            // "whenever i also on telegram-trade which take fake trade and send message" -> implies telegram-trade controls the message sending.
+
+                            // Let's stick to: 
+                            // If Auto-Trade ON: We block funds + Send "Trade Taken" msg.
+                            // If Auto-Trade OFF: We do NOTHING (no trade, maybe no message? or just "Opportunity Found" message?)
+                            // The prompt says: "right now we don;t have to take trade we just have to sent on tg hey i invest x and got x return... do not take trade untill the auto-trade is on"
+                            // This is contradictory. "Right now don't take trade" vs "do not take trade untill auto-trade is on".
+                            // I will assume:
+                            // IF AutoTrade ON: Real Simulation (Block funds + Msg).
+                            // IF AutoTrade OFF: Just Notification (No block funds, but maybe show what WOULD happen?).
+
+                            // Let's add a "Scan Only" notification if High Value?
+                            // For now, adhering strictly to: "do not take trade untill the auto-trade is on".
+                        }
+                    });
+
+                    if (fundsUpdated) {
+                        chrome.storage.local.set({ blockedFunds: blocked });
+                    }
                 }
             }
         }
     });
 }
+
+
+// 7. Force Trade Handler (Manual "Auto Bet")
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === "force_trade") {
+        const { op } = request;
+        if (!op) return;
+
+        chrome.storage.local.get(['tgBotToken', 'tgChatId', 'maxPayroll', 'stakeAmount', 'blockedFunds', 'tradeCount', 'maxTrades'], (result) => {
+            const botToken = result.tgBotToken;
+            const chatId = result.tgChatId;
+            const stake = result.stakeAmount || 100;
+            const maxPay = result.maxPayroll || 1000;
+            let blocked = result.blockedFunds || 0;
+            let tradeCount = result.tradeCount || 0;
+
+            blocked += stake;
+            tradeCount += 1;
+
+            const calc = ArbitrageCalculator.calculateStakes(stake, op.odds[0], op.odds[1]);
+
+            // Log
+            const tradeLog = {
+                ...op,
+                tradeTaken: true,
+                invested: stake,
+                expectedReturn: calc ? calc.totalReturn : 0,
+                timestamp: new Date().toISOString(),
+                manual: true
+            };
+            ArbitrageLogger.logPositive(tradeLog);
+            chrome.storage.local.set({ blockedFunds: blocked, tradeCount: tradeCount });
+
+            // Send TG
+            if (botToken && chatId) {
+                const cleanMatch = op.match.replace(/\*/g, '');
+                const cleanBet = op.betOn.replace(/\*/g, '');
+
+                const msg = `MANUAL BET TAKEN\n\n` +
+                    `Match: ${cleanMatch}\n` +
+                    `Bet: ${cleanBet}\n` +
+                    `Odds: ${op.odds.join(' vs ')}\n` +
+                    `\nInvested: $${stake} | Return: $${calc ? calc.totalReturn : '0'}\n` +
+                    `Total Profit: $${calc ? calc.profit : '0'} (ROI: ${calc ? calc.roi : '0'}%)\n` +
+                    `\nBlocked Funds: $${blocked} / $${maxPay}\n` +
+                    `Trades Session: ${tradeCount}`;
+
+                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}`;
+                fetch(url).catch(e => console.error("TG Send Fail", e));
+            }
+
+            sendResponse({ success: true, blocked: blocked });
+        });
+        return true; // async
+    }
+
+    if (request.action === "bet_placed_success") {
+        chrome.storage.local.get(['tgBotToken', 'tgChatId'], (result) => {
+            const botToken = result.tgBotToken;
+            const chatId = result.tgChatId;
+            if (botToken && chatId) {
+                const msg = `✅ BET SLIP FILLED (Auto)\n\n` +
+                    `Team: ${request.team}\n` +
+                    `Odds Verified: ${request.odds}\n` +
+                    `Amount: ${request.amount || '0.01'}\n` +
+                    `\nPlease confirm manually!`;
+                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}`;
+                fetch(url).catch(e => console.error("TG Send Fail", e));
+            }
+        });
+    }
+});

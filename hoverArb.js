@@ -82,20 +82,25 @@ function handleMouseOver(e) {
 
     if (!isPoly && !isStack) return;
 
-    // Traverse upwards to find a valid container (up to 10 levels)
+    // Traverse upwards to find a valid container (increased to 15)
     let container = null;
     let current = e.target;
 
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 15; i++) {
         if (!current || !current.getAttribute) break; // Stop at document root or text nodes if unhandled
 
         // Checks
         const testId = current.getAttribute('data-testid');
         const role = current.getAttribute('role');
         const isButton = current.tagName === 'BUTTON';
-        const hasOutcomeClass = current.classList && (current.classList.contains('outcome-content') || current.classList.contains('trading-button'));
+        // Polymarket specific classes for outcome buttons
+        const isPolyOutcome = current.classList && (
+            current.classList.contains('c-b-c') ||
+            current.classList.contains('c-b-c-S') || // potential variants
+            current.tagName === 'BUTTON'
+        );
 
-        if (isButton || role === 'button' || testId === 'outcome-content' || hasOutcomeClass) {
+        if (isButton || role === 'button' || testId === 'outcome-content' || isPolyOutcome) {
             container = current;
             break;
         }
