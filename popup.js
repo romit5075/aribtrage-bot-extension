@@ -5,6 +5,29 @@ document.addEventListener('DOMContentLoaded', () => {
     const statusText = document.getElementById('status');
     const resultsArea = document.getElementById('resultsArea');
 
+    // Bet Button Handler
+    resultsArea.addEventListener('click', (e) => {
+        if (e.target.classList.contains('bet-btn')) {
+            const url = e.target.getAttribute('data-link');
+            // Extract team name from button text "P: CHA" -> "CHA"
+            const text = e.target.textContent;
+            let team = text.split(':')[1];
+            if (team) team = team.trim();
+
+            if (url && url !== '#' && url !== 'undefined') {
+                // chrome.tabs.create({ url: url });
+                // New Flow: Send to background to open AND click
+                chrome.runtime.sendMessage({
+                    action: "open_and_click",
+                    url: url,
+                    team: team
+                });
+            } else {
+                alert("Link not available. Please rescan.");
+            }
+        }
+    });
+
     // 1. Load initial state
     updateUI();
 
@@ -319,6 +342,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 tbody tr:nth-child(odd) { background-color: #ffffff; }
                 /* Hover effect */
                 tbody tr:hover { background-color: #f0f0f0; }
+                /* Buttons */
+                .bet-btn { border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; margin: 2px; color: white; display: inline-block; text-decoration: none; }
+                .poly-btn { background-color: #29b6f6; }
+                .stake-btn { background-color: #00bfa5; }
+                .bet-btn:hover { opacity: 0.8; }
             </style>
             <table>
                 <thead>
@@ -330,6 +358,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <th style="color:#00bfa5">Stake A</th>
                         <th>Arb 1 (P_H/S_A)</th>
                         <th>Arb 2 (P_A/S_H)</th>
+                        <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -448,6 +477,9 @@ document.addEventListener('DOMContentLoaded', () => {
                     isSuspended(stakeHome.odds) || isSuspended(stakeAway.odds)) {
                     // Suspended Row
                     const formatOdds = (val) => isSuspended(val) ? '-' : val;
+                    // Truncate function for buttons
+                    const trunc = (str) => str.length > 4 ? str.substring(0, 4) : str;
+
                     tableHtml += `
                         <tr>
                             <td><b>${home.team}</b><br/><span style="font-size:9px;color:#aaa">${stakeHome.team}</span></td>
@@ -456,6 +488,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             <td style="color:${isSuspended(stakeHome.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(stakeHome.odds)}</td>
                             <td style="color:${isSuspended(stakeAway.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(stakeAway.odds)}</td>
                             <td colspan="2" style="font-size:10px; color:#95a5a6">-</td>
+                             <td style="text-align: left;">
+                                <div style="margin-bottom:2px">
+                                    <button class="bet-btn poly-btn" data-link="${home.link}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn poly-btn" data-link="${away.link}">P: ${trunc(away.team)}</button>
+                                </div>
+                                <div>
+                                    <button class="bet-btn stake-btn" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
+                                    <button class="bet-btn stake-btn" data-link="${stakeAway.link}">S: ${trunc(stakeAway.team)}</button>
+                                </div>
+                            </td>
                         </tr>`;
                 } else {
                     // Active Match Row
@@ -464,6 +506,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     // Highlight colors
                     const highlightStyle = "background-color: #ffe0b2; color: #e65100; font-weight: bold;"; // Light orange bg, dark orange text
+
+                    const trunc = (str) => str.length > 4 ? str.substring(0, 4) : str;
 
                     tableHtml += `
                         <tr>
@@ -486,6 +530,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             
                             <td class="${arb1.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb1.profit}%</td>
                             <td class="${arb2.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb2.profit}%</td>
+                             <td style="text-align: left; min-width: 120px;">
+                                <div style="margin-bottom:3px">
+                                    <button class="bet-btn poly-btn" style="${arb1.profit > 0 ? 'border:1px solid red' : ''}" data-link="${home.link}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn poly-btn" style="${arb2.profit > 0 ? 'border:1px solid red' : ''}" data-link="${away.link}">P: ${trunc(away.team)}</button>
+                                </div>
+                                <div>
+                                    <button class="bet-btn stake-btn" style="${arb2.profit > 0 ? 'border:1px solid red' : ''}" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
+                                    <button class="bet-btn stake-btn" style="${arb1.profit > 0 ? 'border:1px solid red' : ''}" data-link="${stakeAway.link}">S: ${trunc(stakeAway.team)}</button>
+                                </div>
+                            </td>
                         </tr>`;
                 }
 
@@ -500,6 +554,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     return polyName;
                 };
 
+                const trunc = (str) => str && str.length > 4 ? str.substring(0, 4) : (str || '');
+
                 // Even if totally missing, show row to prove Poly scanned
                 tableHtml += `
                     <tr>
@@ -512,6 +568,17 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td style="color:#aaa">${stakeAway ? stakeAway.odds : '-'}</td>
                         <td style="color:#aaa">-</td>
                         <td style="color:#aaa">-</td>
+                         <td style="text-align: left;">
+                            <div style="margin-bottom:2px">
+                                <button class="bet-btn poly-btn" data-link="${home.link}">P: ${trunc(home.team)}</button>
+                                <button class="bet-btn poly-btn" data-link="${away.link}">P: ${trunc(away.team)}</button>
+                            </div>
+                            ${stakeHome ? `
+                            <div>
+                                <button class="bet-btn stake-btn" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
+                                <button class="bet-btn stake-btn" data-link="${stakeAway ? stakeAway.link : ''}">S: ${trunc(stakeAway ? stakeAway.team : '')}</button>
+                            </div>` : ''}
+                        </td>
                     </tr>
                  `;
             }

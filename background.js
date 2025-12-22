@@ -88,6 +88,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     }
+
+    if (request.action === "open_and_click") {
+        const { url, team } = request;
+
+        // Helper to trigger click
+        const triggerClick = (tabId) => {
+            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team });
+        };
+
+        // 1. Check if tab exists
+        chrome.tabs.query({}, (tabs) => {
+            const existingTab = tabs.find(t => t.url === url || t.url.includes(url));
+            if (existingTab) {
+                chrome.tabs.update(existingTab.id, { active: true }, () => {
+                    // Wait a bit for focus
+                    setTimeout(() => triggerClick(existingTab.id), 1000);
+                });
+            } else {
+                chrome.tabs.create({ url: url, active: true }, (newTab) => {
+                    // Wait for load
+                    const listener = (tabId, changeInfo) => {
+                        if (tabId === newTab.id && changeInfo.status === 'complete') {
+                            chrome.tabs.onUpdated.removeListener(listener);
+                            setTimeout(() => triggerClick(newTab.id), 2000);
+                        }
+                    };
+                    chrome.tabs.onUpdated.addListener(listener);
+                });
+            }
+        });
+        return true;
+    }
 });
 
 // 2. Alarm Handler

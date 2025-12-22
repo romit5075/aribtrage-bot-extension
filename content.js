@@ -56,8 +56,17 @@ function scrapePageData() {
             const rawText = clone.textContent.trim();
             const odds = parsePolyOdds(rawText);
 
+            // Get Link
+            const linkEl = btn.closest('a');
+            const link = linkEl ? linkEl.href : window.location.href;
+
             if (team !== 'UNKNOWN' && odds) {
-                data.odds.push({ team, odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds), source: 'Poly' });
+                data.odds.push({
+                    team,
+                    odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
+                    source: 'Poly',
+                    link: link
+                });
             }
         });
     }
@@ -91,13 +100,24 @@ function scrapePageData() {
                     }
                 }
 
+                // Get Link
+                const linkEl = item.closest('a');
+                const link = linkEl ? linkEl.href : window.location.href;
+
                 if (team !== 'UNKNOWN' && odds) {
                     const finalOdds = (odds === 'Suspended') ? 'Suspended' : parseFloat(odds);
                     if (finalOdds === 'Suspended' || !isNaN(finalOdds)) {
-                        data.odds.push({ team, odds: finalOdds, source: 'Stack', time: timeKey });
+                        data.odds.push({
+                            team,
+                            odds: finalOdds,
+                            source: 'Stack',
+                            time: timeKey,
+                            link: link
+                        });
                     }
                 }
             });
+
 
             // Auto Click Load More (Throttle check?)
             // Only click if we are NOT in a tight loop. For Live Monitor, maybe avoid spam clicking?
@@ -204,6 +224,64 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 });
             }
         });
+    }
+
+    if (request.action === "click_bet_button") {
+        const targetTeam = request.team ? request.team.toUpperCase() : null;
+        if (!targetTeam) return;
+
+        console.log("Attempting to auto-click bet for:", targetTeam);
+
+        // Try Poly Buttons
+        const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+        let clicked = false;
+
+        polyButtons.forEach(btn => {
+            if (clicked) return;
+            // Robust check using same logic as scraper
+            let team = 'UNKNOWN';
+            const teamNode = btn.querySelector('.opacity-70');
+            if (teamNode) {
+                team = teamNode.textContent.trim().toUpperCase();
+            } else {
+                const txt = btn.textContent.trim().toUpperCase();
+                const match = txt.match(/^([A-Z]{3})/);
+                if (match) team = match[1];
+                else team = txt; // fallback to full text
+            }
+
+            if (team === targetTeam || team.includes(targetTeam) || targetTeam.includes(team)) {
+                console.log("Found Poly Button, Clicking:", btn);
+                btn.click();
+                clicked = true;
+                // Add visual feedback
+                btn.style.border = "3px solid red";
+                setTimeout(() => btn.style.border = "", 2000);
+            }
+        });
+
+        // Try Stake Buttons
+        if (!clicked) {
+            const stackItems = document.querySelectorAll('.outcome-content');
+            stackItems.forEach(item => {
+                if (clicked) return;
+                const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
+                if (nameEl) {
+                    const team = nameEl.textContent.trim().toUpperCase();
+                    if (team === targetTeam || team.includes(targetTeam) || targetTeam.includes(team)) {
+                        const btn = item.closest('button');
+                        if (btn) {
+                            console.log("Found Stake Button, Clicking:", btn);
+                            btn.click();
+                            clicked = true;
+                            // Add visual feedback
+                            btn.style.border = "3px solid red";
+                            setTimeout(() => btn.style.border = "", 2000);
+                        }
+                    }
+                }
+            });
+        }
     }
 });
 
