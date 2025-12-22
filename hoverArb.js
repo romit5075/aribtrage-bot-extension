@@ -1,56 +1,62 @@
-
-// hoverArb.js - Hover Arbitrage Tooltip //
+// hoverArb.js - Hover Arbitrage Calculator //
 
 /* 
- * Displays a tooltip showing the opponent's odds when hovering over a team/outcome.
- * Updated: Directional search to fix "above works but below doesn't" scoping issues.
+ * Simple tooltip: When hovering over any odds element, shows 
+ * what the opponent odds need to be for arbitrage opportunity.
+ * Formula: If odds A, opponent needs > A/(A-1) for profit
  */
 
 let tooltip = null;
 let hoveredElement = null;
-let isHoverEnabled = false;
-let polyData = [];
-let stackData = [];
+let isHoverEnabled = true;
+let hideTimeout = null; // Debounce timer
 
 // Initialize
 (function init() {
     createTooltip();
     loadState();
     setupListeners();
+    console.log("[HoverArb] Initialized - Simple mode (Sticky Fix)");
 })();
 
 function createTooltip() {
+    // Remove existing tooltip if any
+    const existing = document.getElementById('arb-hover-tooltip');
+    if (existing) existing.remove();
+
     tooltip = document.createElement('div');
     tooltip.id = 'arb-hover-tooltip';
 
-    // Style: Ultra-minimal "system-ui" badge style
     Object.assign(tooltip.style, {
         position: 'fixed',
-        background: 'rgba(30, 30, 30, 0.95)', // Slightly more opaque
+        background: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
         color: '#ffffff',
-        padding: '3px 8px',
-        borderRadius: '4px',
-        fontSize: '12px',
+        padding: '8px 12px',
+        borderRadius: '8px',
+        fontSize: '13px',
         fontWeight: '600',
-        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        zIndex: '999999',
+        fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+        zIndex: '2147483647',
         pointerEvents: 'none',
         display: 'none',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-        border: '1px solid rgba(255,255,255,0.2)',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
+        border: '1px solid rgba(76, 175, 80, 0.5)',
         whiteSpace: 'nowrap',
-        transition: 'opacity 0.1s ease-in-out'
+        lineHeight: '1.4'
     });
 
     document.body.appendChild(tooltip);
 }
 
 function loadState() {
-    chrome.storage.local.get(['hoverArbEnabled', 'polymarketData', 'stackData'], (result) => {
-        isHoverEnabled = result.hoverArbEnabled !== false;
-        polyData = result.polymarketData?.odds || [];
-        stackData = result.stackData?.odds || [];
-    });
+    try {
+        chrome.storage.local.get(['hoverArbEnabled'], (result) => {
+            if (chrome.runtime.lastError) return;
+            isHoverEnabled = result.hoverArbEnabled !== false;
+        });
+    } catch (e) {
+        isHoverEnabled = true;
+    }
 }
 
 function setupListeners() {
@@ -58,266 +64,303 @@ function setupListeners() {
     document.addEventListener('mouseout', handleMouseOut, true);
     document.addEventListener('mousemove', updateTooltipPosition, true);
 
-    chrome.storage.onChanged.addListener((changes, area) => {
-        if (area === 'local') {
-            if (changes.hoverArbEnabled) isHoverEnabled = changes.hoverArbEnabled.newValue !== false;
-            if (changes.polymarketData) polyData = changes.polymarketData.newValue?.odds || [];
-            if (changes.stackData) stackData = changes.stackData.newValue?.odds || [];
-        }
-    });
+    try {
+        chrome.storage.onChanged.addListener((changes, area) => {
+            if (area === 'local' && changes.hoverArbEnabled) {
+                isHoverEnabled = changes.hoverArbEnabled.newValue !== false;
+                if (!isHoverEnabled) hideTooltip();
+            }
+        });
 
-    chrome.runtime.onMessage.addListener((msg) => {
-        if (msg.action === 'toggleHoverArb') {
-            isHoverEnabled = msg.isEnabled;
+        chrome.runtime.onMessage.addListener((msg) => {
+            if (msg.action === 'toggleHoverArb') {
+                isHoverEnabled = msg.isEnabled;
+                if (!isHoverEnabled) hideTooltip();
+            }
+        });
+    } catch (e) {
+        // Ignored
+    }
+}
+
+// Parse odds from text - handles multiple formats
+function parseOdds(text) {
+    if (!text || typeof text !== 'string') return null;
+
+    const cleanText = text.trim();
+    if (cleanText.length > 100) return null;
+    if (/suspend|unavail|lock|closed/i.test(cleanText)) return null;
+
+    // 1. Polymarket Cents format: "59¢"
+    const centsMatch = cleanText.match(/(\d+)\s*¢/);
+    if (centsMatch) {
+        const cents = parseInt(centsMatch[1], 10);
+        if (cents > 0 && cents <= 99) {
+            return parseFloat((100 / cents).toFixed(2));
         }
-    });
+    }
+
+    // 2. Any decimal odds in text
+    const decimalMatches = cleanText.match(/(\d+\.\d{1,2})/g);
+    if (decimalMatches) {
+        for (const match of decimalMatches) {
+            const val = parseFloat(match);
+            if (val >= 1.01 && val <= 100) return val;
+        }
+    }
+
+    // 3. Integer that could be odds
+    const intMatch = cleanText.match(/\b(\d{1,2})\b/);
+    if (intMatch && cleanText.length < 10) {
+        const val = parseInt(intMatch[1], 10);
+        if (val >= 2 && val <= 50) return val;
+    }
+
+    return null;
+}
+
+function calculateRequiredOdds(odds) {
+    if (!odds || odds <= 1) return null;
+    const required = odds / (odds - 1);
+    return parseFloat(required.toFixed(2));
+}
+
+// Try to find specific site elements
+function trySpecificSelectors(target) {
+    // === STAKE / SX.BET ===
+    if (target.matches && target.matches('[data-testid="fixture-odds"]')) {
+        const odds = parseOdds(target.textContent);
+        if (odds) return { element: target, odds };
+    }
+    const fixtureOdds = target.closest('[data-testid="fixture-odds"]');
+    if (fixtureOdds) {
+        const odds = parseOdds(fixtureOdds.textContent);
+        if (odds) return { element: fixtureOdds, odds };
+    }
+    const outcomeContent = target.closest('.outcome-content');
+    if (outcomeContent) {
+        const oddsEl = outcomeContent.querySelector('[data-testid="fixture-odds"]');
+        if (oddsEl) {
+            const odds = parseOdds(oddsEl.textContent);
+            if (odds) return { element: outcomeContent, odds };
+        }
+    }
+    const outcomeButton = target.closest('button[class*="outcome"]');
+    if (outcomeButton) {
+        const oddsEl = outcomeButton.querySelector('[data-testid="fixture-odds"]');
+        if (oddsEl) {
+            const odds = parseOdds(oddsEl.textContent);
+            if (odds) return { element: outcomeButton, odds };
+        }
+        const odds = parseOdds(outcomeButton.textContent);
+        if (odds) return { element: outcomeButton, odds };
+    }
+
+    // === POLYMARKET ===
+    const polyButton = target.closest('button.trading-button') || target.closest('button[class*="trading-button"]');
+    if (polyButton) {
+        const odds = parseOdds(polyButton.textContent);
+        if (odds) return { element: polyButton, odds };
+    }
+    const anyButton = target.closest('button');
+    if (anyButton && anyButton.textContent.includes('¢')) {
+        const odds = parseOdds(anyButton.textContent);
+        if (odds) return { element: anyButton, odds };
+    }
+
+    // Generic button fallback
+    if (anyButton) {
+        const odds = parseOdds(anyButton.textContent);
+        if (odds) return { element: anyButton, odds };
+    }
+
+    // === GENERIC ODDS BOXES ===
+    const oddsBox = target.closest('div[class*="variant-secondary"]') ||
+        target.closest('div[class*="outcome"]') ||
+        target.closest('div[class*="odds"]');
+    if (oddsBox) {
+        const odds = parseOdds(oddsBox.textContent);
+        if (odds) return { element: oddsBox, odds };
+    }
+
+    return null;
+}
+
+// Generic odds finder
+function findOddsGeneric(target) {
+    let current = target;
+    for (let i = 0; i < 6; i++) {
+        if (!current || current.tagName === 'BODY' || current.tagName === 'HTML') break;
+
+        const fullText = current.textContent || '';
+        if (fullText.length < 50) {
+            const odds = parseOdds(fullText);
+            if (odds) return { element: current, odds };
+        }
+
+        const directText = getDirectTextContent(current);
+        if (directText) {
+            const odds = parseOdds(directText);
+            if (odds) return { element: current, odds };
+        }
+        current = current.parentElement;
+    }
+    return null;
+}
+
+function getDirectTextContent(element) {
+    let text = '';
+    for (const node of element.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) text += node.textContent;
+    }
+    return text.trim();
 }
 
 function handleMouseOver(e) {
     if (!isHoverEnabled || !tooltip) return;
 
-    const isPoly = window.location.hostname.includes('polymarket');
-    const isStack = window.location.hostname.includes('sx.bet') || window.location.hostname.includes('stake') || window.location.hostname.includes('sportx');
-
-    if (!isPoly && !isStack) return;
-
-    let current = e.target;
-    let container = null;
-    let detectedOdds = null;
-
-    // Odds Parser
-    const parseOddsFromText = (str) => {
-        if (!str) return null;
-
-        // 1. Cents (Polymarket special)
-        if (str.includes('¢')) {
-            const centMatch = str.match(/(\d+)¢/);
-            if (centMatch) {
-                const cents = parseInt(centMatch[1]);
-                if (cents > 0) return (100 / cents).toFixed(2);
-            }
-        }
-
-        // 2. Decimal / Int Odds
-        const matches = str.matchAll(/\b\d+(\.\d{1,2})?\b/g);
-        for (const match of matches) {
-            const val = parseFloat(match[0]);
-            if (!isNaN(val) && val >= 1.01 && val < 999) {
-                if (match[0].includes('.')) return val; // Preferred format 1.50
-                if (str.length < 15) return val; // Standalone integer like "2"
-            }
-        }
-        return null;
-    };
-
-    // 1. Find Odds element
-    let oddsValue = parseOddsFromText(current.textContent.trim());
-    if (oddsValue) {
-        container = current;
-        detectedOdds = oddsValue;
-    } else {
-        // Walk up to find container with odds
-        let temp = current;
-        for (let i = 0; i < 5; i++) {
-            if (!temp) break;
-            const pOdds = parseOddsFromText(temp.textContent.trim());
-            if (pOdds) {
-                container = temp;
-                detectedOdds = pOdds;
-                break;
-            }
-            temp = temp.parentElement;
-        }
+    // CANCEL ANY PROPOSED HIDE ACTION IMMEDIATELY
+    if (hideTimeout) {
+        clearTimeout(hideTimeout);
+        hideTimeout = null;
     }
 
-    if (!container || !detectedOdds) return;
+    const target = e.target;
+    if (tooltip && tooltip.contains(target)) return;
 
-    // 2. Directional Search for Team Name
-    const teamName = findTeamNameFromOddsContext(container, isPoly);
-    if (!teamName) return;
-
-    // 3. Find Opponent & Show
-    const contextSiblings = getContextSiblings(container);
-    const otherList = isPoly ? stackData : polyData;
-    const opponentFunc = findOpponentOdds(teamName, otherList, contextSiblings);
-
-    if (opponentFunc) {
-        showTooltip(container, opponentFunc.odds);
+    // If we're inside the current element, we're good
+    if (hoveredElement && (hoveredElement === target || hoveredElement.contains(target))) {
+        return;
     }
-}
 
-function findTeamNameFromOddsContext(oddsElement, isPoly) {
-    let current = oddsElement;
+    // Try finding odds
+    let result = trySpecificSelectors(target);
+    if (!result) result = findOddsGeneric(target);
 
-    for (let i = 0; i < 6; i++) {
-        const parent = current.parentElement;
-        if (!parent) break;
-
-        // A. Primary: Internal/Own Text
-        let internal = extractTeamName(current, isPoly);
-        if (internal && internal.length > 1 && !/^\d/.test(internal)) return internal;
-
-        // B. Secondary: DIRECTIONAL PREVIOUS SIBLINGS (Closest to cursor)
-        let prev = current.previousElementSibling;
-        while (prev) {
-            let t = prev.textContent.trim();
-            if (t.length > 2 && /[A-Z]/.test(t) && !/^\d+(\.\d+)?$/.test(t)) {
-                let c = cleanName(t);
-                if (c) return c;
-            }
-            prev = prev.previousElementSibling;
-        }
-
-        // C. Tertiary: Any sibling in the immediate parent block
-        const siblings = Array.from(parent.children);
-        for (let sib of siblings) {
-            if (sib === current || sib.contains(current)) continue;
-            let t = sib.textContent.trim();
-            if (t.length > 2 && /[A-Z]/.test(t) && !/^\d+(\.\d{1,2})?$/.test(t)) {
-                let c = cleanName(t);
-                if (c) return c;
-            }
-        }
-
-        // D. Context Specific Selectors
-        if (isPoly) {
-            const op = parent.querySelector('.opacity-70');
-            if (op) {
-                const t = cleanName(op.textContent);
-                if (t) return t;
-            }
-        }
-
-        current = parent;
+    if (!result) {
+        // We aren't on an odds element, but we might have just left one.
+        // Let handleMouseOut manage the hiding via delay.
+        return;
     }
-    return null;
-}
 
-function cleanName(t) {
-    if (!t) return null;
-    let c = t.replace(/\n/g, ' ').replace(/¢/g, '').trim().toUpperCase();
-    c = c.replace(/\s+\d+(\.\d+)?\s*$/, '');
-    c = c.replace(/\s+\d+\s*$/, '');
-    if (c.length < 2 || /^\d/.test(c)) return null;
-    return c;
-}
+    const { element, odds } = result;
 
-function extractTeamName(element, isPoly) {
-    let rawText = "";
-    if (isPoly) {
-        const op = element.querySelector('.opacity-70');
-        if (op) rawText = op.textContent;
-        else rawText = element.textContent;
-    } else {
-        const nameEl = element.querySelector('[data-testid="outcome-button-name"]');
-        if (nameEl) rawText = nameEl.textContent;
-        else {
-            if (element.cloneNode) {
-                const clone = element.cloneNode(true);
-                const oddsEls = clone.querySelectorAll('[data-testid="outcome-button-odds"], .outcome-odds');
-                oddsEls.forEach(el => el.remove());
-                rawText = clone.textContent.trim();
-            } else {
-                rawText = element.textContent;
-            }
-        }
+    // Switch to new element
+    if (element !== hoveredElement) {
+        // Force hide previous immediately to switch clean
+        if (hoveredElement) hideTooltip();
+
+        const requiredOdds = calculateRequiredOdds(odds);
+        if (!requiredOdds || requiredOdds > 100) return;
+
+        showTooltip(element, odds, requiredOdds, e);
     }
-    return cleanName(rawText);
 }
 
 function handleMouseOut(e) {
-    if (hoveredElement && (e.target === hoveredElement || hoveredElement.contains(e.target))) {
+    if (!hoveredElement) return;
+
+    // DEBOUNCE HIDE: 
+    // Give user 150ms to move to a child element or back into the element
+    // before we actually hide the tooltip.
+
+    const relatedTarget = e.relatedTarget;
+
+    // If strictly moving inside, ignore
+    if (relatedTarget && hoveredElement.contains(relatedTarget)) return;
+    if (relatedTarget && tooltip && tooltip.contains(relatedTarget)) return;
+
+    // Schedule hide
+    hideTimeout = setTimeout(() => {
         hideTooltip();
-    }
+    }, 150);
 }
 
 function updateTooltipPosition(e) {
-    if (tooltip && tooltip.style.display === 'block') {
-        tooltip.style.top = (e.clientY + 15) + 'px'; // Slightly more offset to clear cursor
-        tooltip.style.left = (e.clientX + 15) + 'px';
+    if (!tooltip || tooltip.style.display !== 'block') return;
+
+    const offsetX = 15;
+    const offsetY = 15;
+    const padding = 10;
+
+    let x = e.clientX + offsetX;
+    let y = e.clientY + offsetY;
+
+    // Get tooltip dimensions
+    const tooltipWidth = tooltip.offsetWidth || 180;
+    const tooltipHeight = tooltip.offsetHeight || 60;
+
+    // Keep within viewport
+    if (x + tooltipWidth + padding > window.innerWidth) {
+        x = e.clientX - tooltipWidth - offsetX;
     }
+    if (y + tooltipHeight + padding > window.innerHeight) {
+        y = e.clientY - tooltipHeight - offsetY;
+    }
+    if (x < padding) x = padding;
+    if (y < padding) y = padding;
+
+    tooltip.style.left = x + 'px';
+    tooltip.style.top = y + 'px';
 }
 
-function showTooltip(element, odds) {
-    if (hoveredElement === element) return;
-    if (hoveredElement) hoveredElement.style.border = hoveredElement.dataset.origBorder || '';
+function showTooltip(element, currentOdds, requiredOdds, event) {
+    // Clean up previous highlight
+    if (hoveredElement && hoveredElement !== element) {
+        hoveredElement.style.outline = hoveredElement.dataset.origOutline || '';
+    }
 
     hoveredElement = element;
-    element.dataset.origBorder = element.style.border || '';
-    element.style.border = '2px solid #4CAF50';
 
-    tooltip.textContent = `Opponent > ${odds}`;
+    // Save original style and apply highlight
+    if (!element.dataset.origOutline) {
+        element.dataset.origOutline = element.style.outline || '';
+    }
+    element.style.outline = '2px solid #4CAF50';
+
+    // Determine profit potential indicator
+    // Lower required odds = easier to find arb
+    let statusColor, statusText;
+    if (requiredOdds <= 1.5) {
+        statusColor = '#4CAF50'; // Green - very favorable
+        statusText = '🟢 Easy';
+    } else if (requiredOdds <= 2.0) {
+        statusColor = '#8BC34A'; // Light green - good
+        statusText = '🟢 Good';
+    } else if (requiredOdds <= 3.0) {
+        statusColor = '#FFC107'; // Yellow - moderate
+        statusText = '🟡 Moderate';
+    } else {
+        statusColor = '#FF9800'; // Orange - harder
+        statusText = '🟠 Harder';
+    }
+
+    // Build tooltip content
+    tooltip.innerHTML = `
+        <div style="margin-bottom: 4px; color: #aaa; font-size: 11px;">
+            Current: <span style="color: #fff; font-weight: bold;">${currentOdds}</span>
+        </div>
+        <div style="font-size: 14px; margin-bottom: 2px;">
+            Opponent needs: <span style="color: ${statusColor}; font-weight: bold;">&gt; ${requiredOdds}</span>
+        </div>
+        <div style="font-size: 10px; color: ${statusColor};">${statusText}</div>
+    `;
+
     tooltip.style.display = 'block';
+
+    // Position immediately
+    if (event) {
+        updateTooltipPosition(event);
+    }
 }
 
 function hideTooltip() {
-    if (tooltip) tooltip.style.display = 'none';
+    if (tooltip) {
+        tooltip.style.display = 'none';
+    }
+
     if (hoveredElement) {
-        hoveredElement.style.border = hoveredElement.dataset.origBorder || '';
+        hoveredElement.style.outline = hoveredElement.dataset.origOutline || '';
         hoveredElement = null;
     }
-}
-
-function getContextSiblings(element) {
-    let parent = element.parentElement;
-    const siblings = [];
-    for (let i = 0; i < 3; i++) {
-        if (!parent) break;
-        const candidates = parent.querySelectorAll('span, div, button, [role="button"]');
-        candidates.forEach(c => {
-            if (c === element || c.contains(element) || element.contains(c)) return;
-            const t = c.textContent.trim();
-            if (t.length > 2 && !t.includes(':') && !t.includes('%')) {
-                siblings.push(t.toUpperCase());
-            }
-        });
-        if (siblings.length > 0) break;
-        parent = parent.parentElement;
-    }
-    return siblings;
-}
-
-function findOpponentOdds(myName, list, contextSiblings = []) {
-    if (!list || list.length === 0) return null;
-    const normalize = (str) => str.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-
-    const isMatch = (t1, t2) => {
-        if (!t1 || !t2) return false;
-        if (t1 === t2) return true;
-        const n1 = normalize(t1);
-        const n2 = normalize(t2);
-        if (n1.includes(n2) || n2.includes(n1)) return true;
-        const tokens1 = t1.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
-        const tokens2 = t2.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
-        const intersection = tokens1.filter(t => tokens2.includes(t));
-        const commons = ['TEAM', 'ESPORTS', 'GAMING', 'CLUB', 'PRO', 'CLAN'];
-        const meaningful = intersection.filter(t => !commons.includes(t));
-        return meaningful.length > 0;
-    };
-
-    for (let i = 0; i < list.length - 1; i++) {
-        const itemA = list[i];
-        const itemB = list[i + 1];
-        let myIndex = -1;
-        if (isMatch(itemA.team, myName)) myIndex = 0;
-        else if (isMatch(itemB.team, myName)) myIndex = 1;
-
-        if (myIndex !== -1) {
-            const opponentItem = myIndex === 0 ? itemB : itemA;
-            if (contextSiblings.length > 0) {
-                if (contextSiblings.some(sib => isMatch(sib, opponentItem.team))) return { team: opponentItem.team, odds: opponentItem.odds };
-            } else {
-                return { team: opponentItem.team, odds: opponentItem.odds };
-            }
-        }
-    }
-
-    let index = list.findIndex(item => isMatch(item.team, myName));
-    if (index === -1) return null;
-    const isEven = index % 2 === 0;
-    const opponentIndex = isEven ? index + 1 : index - 1;
-    if (opponentIndex >= 0 && opponentIndex < list.length) {
-        return { team: list[opponentIndex].team, odds: list[opponentIndex].odds };
-    }
-    return null;
 }
