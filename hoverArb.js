@@ -3,7 +3,7 @@
 
 /* 
  * Displays a tooltip showing the opponent's odds when hovering over a team/outcome.
- * Simplified per user request: "Opponent > X.XX" (showing available odds on other site).
+ * Updated: Directional search to fix "above works but below doesn't" scoping issues.
  */
 
 let tooltip = null;
@@ -26,20 +26,20 @@ function createTooltip() {
     // Style: Ultra-minimal "system-ui" badge style
     Object.assign(tooltip.style, {
         position: 'fixed',
-        background: 'rgba(30, 30, 30, 0.9)', // Deep dark grey, slightly transparent
+        background: 'rgba(30, 30, 30, 0.95)', // Slightly more opaque
         color: '#ffffff',
-        padding: '3px 6px',
+        padding: '3px 8px',
         borderRadius: '4px',
-        fontSize: '11px', // Small font like the reference
-        fontWeight: '500',
+        fontSize: '12px',
+        fontWeight: '600',
         fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         zIndex: '999999',
         pointerEvents: 'none',
         display: 'none',
-        boxShadow: '0 2px 5px rgba(0,0,0,0.2)', // Subtle shadow
-        border: '1px solid rgba(255,255,255,0.1)', // Very subtle border
+        boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        border: '1px solid rgba(255,255,255,0.2)',
         whiteSpace: 'nowrap',
-        marginTop: '-25px' // Position slightly above cursor by default logic (or handled in update pos)
+        transition: 'opacity 0.1s ease-in-out'
     });
 
     document.body.appendChild(tooltip);
@@ -54,7 +54,6 @@ function loadState() {
 }
 
 function setupListeners() {
-    // Use true for capture phase to ensure we catch everything
     document.addEventListener('mouseover', handleMouseOver, true);
     document.addEventListener('mouseout', handleMouseOut, true);
     document.addEventListener('mousemove', updateTooltipPosition, true);
@@ -77,7 +76,6 @@ function setupListeners() {
 function handleMouseOver(e) {
     if (!isHoverEnabled || !tooltip) return;
 
-    // Detect site
     const isPoly = window.location.hostname.includes('polymarket');
     const isStack = window.location.hostname.includes('sx.bet') || window.location.hostname.includes('stake') || window.location.hostname.includes('sportx');
 
@@ -87,12 +85,11 @@ function handleMouseOver(e) {
     let container = null;
     let detectedOdds = null;
 
-    // Helper to check for odds or cents in text
-    // Returns the decimal odds if found, or null
+    // Odds Parser
     const parseOddsFromText = (str) => {
         if (!str) return null;
 
-        // 1. Check for Cents (Universal check, just in case)
+        // 1. Cents (Polymarket special)
         if (str.includes('¢')) {
             const centMatch = str.match(/(\d+)¢/);
             if (centMatch) {
@@ -101,54 +98,33 @@ function handleMouseOver(e) {
             }
         }
 
-        // 2. Check for Decimal Odds (Standard)
-        // Matches integers and decimals: "1.50", "2", "3.45"
+        // 2. Decimal / Int Odds
         const matches = str.matchAll(/\b\d+(\.\d{1,2})?\b/g);
         for (const match of matches) {
             const val = parseFloat(match[0]);
-            if (!isNaN(val) && val >= 1.01 && val < 999) { // Increased upper limit
-                if (match[0].includes('.')) return val;
-                // If Integer, trust it if text is reasonably short
-                if (str.length < 15) return val;
+            if (!isNaN(val) && val >= 1.01 && val < 999) {
+                if (match[0].includes('.')) return val; // Preferred format 1.50
+                if (str.length < 15) return val; // Standalone integer like "2"
             }
         }
         return null;
     };
 
-    // 1. UNIVERSAL CHECK
-    // Check current element
-    let t = current.textContent.trim();
-    let odds = parseOddsFromText(t);
-
-    if (odds) {
+    // 1. Find Odds element
+    let oddsValue = parseOddsFromText(current.textContent.trim());
+    if (oddsValue) {
         container = current;
-        detectedOdds = odds;
+        detectedOdds = oddsValue;
     } else {
-        // Fallback: Check traversing UP (parents)
+        // Walk up to find container with odds
         let temp = current;
-        for (let i = 0; i < 5; i++) { // 5 levels up max
+        for (let i = 0; i < 5; i++) {
             if (!temp) break;
-
-            // Check direct text of this parent (or its "button-like" content)
-            const pText = temp.textContent.trim();
-            // Allow denser containers but not massive blocks
-            if (pText.length < 60) {
-                const pOdds = parseOddsFromText(pText);
-                if (pOdds) {
-                    container = temp;
-                    detectedOdds = pOdds;
-                    break;
-                }
-            }
-            // Explicit button check (always check buttons regardless of length, within reason)
-            if (temp.tagName === 'BUTTON' || temp.getAttribute('role') === 'button') {
-                const buttonText = temp.textContent.trim();
-                const buttonOdds = parseOddsFromText(buttonText);
-                if (buttonOdds) {
-                    container = temp;
-                    detectedOdds = buttonOdds;
-                    break;
-                }
+            const pOdds = parseOddsFromText(temp.textContent.trim());
+            if (pOdds) {
+                container = temp;
+                detectedOdds = pOdds;
+                break;
             }
             temp = temp.parentElement;
         }
@@ -156,12 +132,11 @@ function handleMouseOver(e) {
 
     if (!container || !detectedOdds) return;
 
-    // 2. Identify Context (Find Team Name)
+    // 2. Directional Search for Team Name
     const teamName = findTeamNameFromOddsContext(container, isPoly);
-
     if (!teamName) return;
 
-    // 3. Find Opponent Odds
+    // 3. Find Opponent & Show
     const contextSiblings = getContextSiblings(container);
     const otherList = isPoly ? stackData : polyData;
     const opponentFunc = findOpponentOdds(teamName, otherList, contextSiblings);
@@ -171,79 +146,63 @@ function handleMouseOver(e) {
     }
 }
 
-// Helper: robustly find team name by looking UP and AROUND the odds element
 function findTeamNameFromOddsContext(oddsElement, isPoly) {
-    // 1. Try legacy inner-extraction first
-    let legacy = extractTeamName(oddsElement, isPoly);
-    if (legacy && legacy.length > 1 && !/^\d/.test(legacy)) return legacy;
+    let current = oddsElement;
 
-    // 2. Search Upwards for Neighboring Info
-    let parent = oddsElement.parentElement;
+    for (let i = 0; i < 6; i++) {
+        const parent = current.parentElement;
+        if (!parent) break;
 
-    // Scan scope - limit to 5 levels to avoid grabbing "Table" or "List" scope
-    for (let i = 0; i < 5; i++) {
-        if (!parent) return null;
+        // A. Primary: Internal/Own Text
+        let internal = extractTeamName(current, isPoly);
+        if (internal && internal.length > 1 && !/^\d/.test(internal)) return internal;
 
-        // A. Check Siblings in this scope (Prioritize near siblings)
-        // This prevents querySelector from jumping to the first item in a large list
+        // B. Secondary: DIRECTIONAL PREVIOUS SIBLINGS (Closest to cursor)
+        let prev = current.previousElementSibling;
+        while (prev) {
+            let t = prev.textContent.trim();
+            if (t.length > 2 && /[A-Z]/.test(t) && !/^\d+(\.\d+)?$/.test(t)) {
+                let c = cleanName(t);
+                if (c) return c;
+            }
+            prev = prev.previousElementSibling;
+        }
+
+        // C. Tertiary: Any sibling in the immediate parent block
         const siblings = Array.from(parent.children);
         for (let sib of siblings) {
-            if (sib === oddsElement || sib.contains(oddsElement)) continue;
-
+            if (sib === current || sib.contains(current)) continue;
             let t = sib.textContent.trim();
-            if (!t || /^\d+(\.\d+)?$/.test(t) || t.includes(':') || t.includes('%')) continue;
-
-            // Heuristic: Capital letters + length
-            if (t.length > 2 && /[A-Z]/.test(t)) {
-
-                const c = cleanName(t);
+            if (t.length > 2 && /[A-Z]/.test(t) && !/^\d+(\.\d{1,2})?$/.test(t)) {
+                let c = cleanName(t);
                 if (c) return c;
             }
         }
 
-        // B. Check Explicit Selectors (Secondary priority to avoid scope creep)
+        // D. Context Specific Selectors
         if (isPoly) {
-            // Check ONLY direct children or close descendants if possible
             const op = parent.querySelector('.opacity-70');
             if (op) {
                 const t = cleanName(op.textContent);
                 if (t) return t;
             }
-        } else {
-            const nameEl = parent.querySelector('[data-testid="outcome-button-name"]');
-            if (nameEl) {
-                const t = cleanName(nameEl.textContent);
-                if (t) return t;
-            }
         }
 
-        // C. Previous Sibling of Parent? (Row Label)
-        if (parent.previousElementSibling) {
-            const prev = parent.previousElementSibling;
-            const t = prev.textContent.trim();
-            if (t.length > 2 && /[A-Z]/.test(t) && !/^\d+(\.\d+)?$/.test(t)) {
-                const c = cleanName(t);
-                if (c) return c;
-            }
-        }
-
-        parent = parent.parentElement;
+        current = parent;
     }
     return null;
 }
 
 function cleanName(t) {
     if (!t) return null;
-    let c = t.replace(/\n/g, ' ').replace(/¢/g, '');
-    c = c.replace(/\s+\d+(\.\d+)?\s*$/, '');  // remove trailing odds
+    let c = t.replace(/\n/g, ' ').replace(/¢/g, '').trim().toUpperCase();
+    c = c.replace(/\s+\d+(\.\d+)?\s*$/, '');
     c = c.replace(/\s+\d+\s*$/, '');
-    c = c.trim().toUpperCase();
     if (c.length < 2 || /^\d/.test(c)) return null;
     return c;
 }
 
 function extractTeamName(element, isPoly) {
-    // Original button-centric extraction (fallback)
     let rawText = "";
     if (isPoly) {
         const op = element.querySelector('.opacity-70');
@@ -273,28 +232,21 @@ function handleMouseOut(e) {
 }
 
 function updateTooltipPosition(e) {
-    if (tooltip.style.display === 'block') {
-        tooltip.style.top = (e.clientY + 12) + 'px';
-        tooltip.style.left = (e.clientX + 12) + 'px';
+    if (tooltip && tooltip.style.display === 'block') {
+        tooltip.style.top = (e.clientY + 15) + 'px'; // Slightly more offset to clear cursor
+        tooltip.style.left = (e.clientX + 15) + 'px';
     }
 }
 
 function showTooltip(element, odds) {
     if (hoveredElement === element) return;
-
-    if (hoveredElement) {
-        hoveredElement.style.border = hoveredElement.dataset.origBorder || '';
-    }
+    if (hoveredElement) hoveredElement.style.border = hoveredElement.dataset.origBorder || '';
 
     hoveredElement = element;
-
-    // Highlight
     element.dataset.origBorder = element.style.border || '';
     element.style.border = '2px solid #4CAF50';
 
-    // Text: "Opponent > 2.55"
     tooltip.textContent = `Opponent > ${odds}`;
-
     tooltip.style.display = 'block';
 }
 
@@ -306,13 +258,9 @@ function hideTooltip() {
     }
 }
 
-// Helper to get siblings' text for context
 function getContextSiblings(element) {
-    // Go up to a container row/card
     let parent = element.parentElement;
     const siblings = [];
-
-    // Traverse up max 3 levels to find a group
     for (let i = 0; i < 3; i++) {
         if (!parent) break;
         const candidates = parent.querySelectorAll('span, div, button, [role="button"]');
@@ -331,69 +279,45 @@ function getContextSiblings(element) {
 
 function findOpponentOdds(myName, list, contextSiblings = []) {
     if (!list || list.length === 0) return null;
-
-    // Helper: does string match?
     const normalize = (str) => str.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
     const isMatch = (t1, t2) => {
+        if (!t1 || !t2) return false;
         if (t1 === t2) return true;
-
-        // 1. Direct "Clean" Match
         const n1 = normalize(t1);
         const n2 = normalize(t2);
-
         if (n1.includes(n2) || n2.includes(n1)) return true;
-
-        // 2. Token overlap
         const tokens1 = t1.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
         const tokens2 = t2.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
-
         const intersection = tokens1.filter(t => tokens2.includes(t));
         const commons = ['TEAM', 'ESPORTS', 'GAMING', 'CLUB', 'PRO', 'CLAN'];
         const meaningful = intersection.filter(t => !commons.includes(t));
-
         return meaningful.length > 0;
     };
 
-    // 1. Search for a PAIR/Cluster that matches matches MyName AND Context
     for (let i = 0; i < list.length - 1; i++) {
-        // Window of check: i and i+1 (pair)
         const itemA = list[i];
         const itemB = list[i + 1];
-
-        const nameA = itemA.team;
-        const nameB = itemB.team;
-
-        // Check if this pair involves MyName
         let myIndex = -1;
-        if (isMatch(nameA, myName)) myIndex = 0;
-        else if (isMatch(nameB, myName)) myIndex = 1;
+        if (isMatch(itemA.team, myName)) myIndex = 0;
+        else if (isMatch(itemB.team, myName)) myIndex = 1;
 
         if (myIndex !== -1) {
-            // Found MyName. Does this pair match context?
             const opponentItem = myIndex === 0 ? itemB : itemA;
-            const opponentName = opponentItem.team;
-
             if (contextSiblings.length > 0) {
-                const contextMatch = contextSiblings.some(sib => isMatch(sib, opponentName));
-                if (contextMatch) {
-                    return { team: opponentName, odds: opponentItem.odds };
-                }
+                if (contextSiblings.some(sib => isMatch(sib, opponentItem.team))) return { team: opponentItem.team, odds: opponentItem.odds };
             } else {
-                return { team: opponentName, odds: opponentItem.odds };
+                return { team: opponentItem.team, odds: opponentItem.odds };
             }
         }
     }
 
-    // Fallback: Simple index search
     let index = list.findIndex(item => isMatch(item.team, myName));
     if (index === -1) return null;
-
     const isEven = index % 2 === 0;
     const opponentIndex = isEven ? index + 1 : index - 1;
     if (opponentIndex >= 0 && opponentIndex < list.length) {
         return { team: list[opponentIndex].team, odds: list[opponentIndex].odds };
     }
-
     return null;
 }
