@@ -54,6 +54,7 @@ function loadState() {
 }
 
 function setupListeners() {
+    // Use true for capture phase to ensure we catch everything
     document.addEventListener('mouseover', handleMouseOver, true);
     document.addEventListener('mouseout', handleMouseOut, true);
     document.addEventListener('mousemove', updateTooltipPosition, true);
@@ -82,56 +83,51 @@ function handleMouseOver(e) {
 
     if (!isPoly && !isStack) return;
 
-    // Traverse upwards to find a valid container
-    let container = null;
     let current = e.target;
-    let foundRef = null;
+    let container = null;
 
-    // 1. Text Check: Does the hovered element look like odds?
+    // 1. UNIVERSAL ODDS CHECK
+    // Trigger on ANY element that looks like it contains just a decimal number (the odds)
     const text = current.textContent.trim();
-    const isOddsText = /^\d+(\.\d+)?$/.test(text) && text.length < 6;
+    // Regex for Odds: Number, optional decimal, max 6 chars
+    // Examples: "1.5", "10", "3.45"
+    // Exclude long text to avoid triggering on sentences
+    const isOdds = /^\d+(\.\d{1,2})?$/.test(text) && text.length < 7;
 
-    for (let i = 0; i < 15; i++) {
-        if (!current || !current.getAttribute) break;
-
-        // Identification Checks
-        const testId = current.getAttribute('data-testid');
-        const role = current.getAttribute('role');
-        const isButton = current.tagName === 'BUTTON';
-
-        // Polymarket Outcome
-        const isPolyOutcome = current.classList && (
-            current.classList.contains('c-b-c') ||
-            current.classList.contains('c-b-c-S') ||
-            (isButton && current.querySelector('.opacity-70')) // Poly often puts name in opacity-70
-        );
-
-        // General Sportsbook Odds Button
-        const isOddsButton = isButton ||
-            role === 'button' ||
-            testId === 'outcome-content' ||
-            current.classList.contains('outcome-odds');
-
-        if (isPolyOutcome || isOddsButton || (isOddsText && i < 3)) { // Allow text span if close to leaf
-            // If we found a container that seems relevant
-            container = current;
-            // If we hit a definitive button, stop
-            if (isButton || role === 'button') break;
+    if (isOdds) {
+        container = current;
+    } else {
+        // Fallback: Check up to 4 parents if THEY are the "odds container"
+        let temp = current;
+        for (let i = 0; i < 4; i++) {
+            if (!temp) break;
+            const t = temp.textContent.trim();
+            if (/^\d+(\.\d{1,2})?$/.test(t) && t.length < 7) {
+                container = temp;
+                break;
+            }
+            // Explicit button check
+            if (temp.tagName === 'BUTTON' || temp.getAttribute('role') === 'button') {
+                // If the button has odds inside
+                if (/^\d+(\.\d{1,2})?$/.test(temp.textContent.trim().split(' ').pop())) {
+                    container = temp;
+                    break;
+                }
+            }
+            temp = temp.parentElement;
         }
-
-        current = current.parentNode;
     }
 
-    if (!container) return;
+    if (!container) return; // No odds found
 
-    // 1. Get Team Name (Robust Context Search)
-    const teamName = extractTeamName(container, isPoly);
+    // 2. Identify Context (Find Team Name)
+    const teamName = findTeamNameFromOddsContext(container, isPoly);
+
     if (!teamName) return;
 
-    // 2. Get Context (Siblings)
+    // 3. Find Opponent Odds & Show Tooltip
+    // Generate context siblings (other names in the row) to help disambiguate
     const contextSiblings = getContextSiblings(container);
-
-    // 3. Find Opponent Odds
     const otherList = isPoly ? stackData : polyData;
     const opponentFunc = findOpponentOdds(teamName, otherList, contextSiblings);
 
@@ -140,101 +136,196 @@ function handleMouseOver(e) {
     }
 }
 
-function extractTeamName(element, isPoly) {
-    let rawText = "";
+// Helper: robustly find team name by looking UP and AROUND the odds element
+function findTeamNameFromOddsContext(oddsElement, isPoly) {
+    // 1. Try legacy inner-extraction first (if it's a known button type)
+    let legacy = extractTeamName(oddsElement, isPoly);
+    if (legacy && legacy.length > 1 && !/^\d/.test(legacy)) return legacy;
 
-    // Strategy 1: Internal Search (Works for Poly & Standard Buttons)
+    // 2. Search Upwards for Neighboring Info
+    let parent = oddsElement.parentElement;
+
+    // We scan UP to 8 levels to find the "Card" or "Row"
+    for (let i = 0; i < 8; i++) {
+        if (!parent) return null;
+
+        // A. Check for explicit name elements in this scope (Polymarket / common patterns)
+        if (isPoly) {
+            const op = parent.querySelector('.opacity-70');
+            if (op) {
+                const t = cleanName(op.textContent);
+                if (t) return t;
+            }
+        } else {
+            // Stake specific testid
+            const nameEl = parent.querySelector('[data-testid="outcome-button-name"]');
+            if (nameEl) {
+                const t = cleanName(nameEl.textContent);
+                if (t) return t;
+            }
+        }
+
+        // B. Check Siblings in this scope (Row/Card scanning)
+        // Look for any sibling that has text which is NOT odds
+        // This is generic handling for "Grid" layouts where Name is a separate div from Odds div
+        if (parent.children) {
+            const siblings = Array.from(parent.children);
+            for (let sib of siblings) {
+                // Don't look at myself (or the branch containing myself)
+                if (sib === oddsElement || sib.contains(oddsElement)) continue;
+
+                let t = sib.textContent.trim();
+                // skip if empty or looks like odds
+                if (!t || /^\d+(\.\d+)?$/.test(t)) continue;
+                if (t.includes(':') || t.includes('%')) continue; // skip clocks/percentages
+
+                // Heuristic: Capital letters + length
+                if (t.length > 2 && /[A-Z]/.test(t)) {
+                    const c = cleanName(t);
+                    if (c) return c;
+                }
+            }
+        }
+
+        // C. Previous Sibling of Parent? (Row Label for a set of buttons)
+        if (parent.previousElementSibling) {
+            let prev = parent.previousElementSibling;
+            let t = prev.textContent.trim();
+            if (t.length > 2 && /[A-Z]/.test(t) && !/^\d+(\.\d+)?$/.test(t)) {
+                const c = cleanName(t);
+                if (c) return c;
+            }
+        }
+
+        parent = parent.parentElement;
+    }
+    return null;
+}
+
+function cleanName(t) {
+    if (!t) return null;
+    let c = t.replace(/\n/g, ' ').replace(/¢/g, '');
+    c = c.replace(/\s+\d+(\.\d+)?\s*$/, '');  // remove trailing odds
+    c = c.replace(/\s+\d+\s*$/, '');
+    c = c.trim().toUpperCase();
+    if (c.length < 2 || /^\d/.test(c)) return null;
+    return c;
+}
+
+function extractTeamName(element, isPoly) {
+    // Original button-centric extraction (fallback)
+    let rawText = "";
     if (isPoly) {
         const op = element.querySelector('.opacity-70');
         if (op) rawText = op.textContent;
         else rawText = element.textContent;
     } else {
         const nameEl = element.querySelector('[data-testid="outcome-button-name"]');
-        if (nameEl) {
-            rawText = nameEl.textContent;
-        } else {
-            // Clone to avoid mutation logic issues
-            const clone = element.cloneNode(true);
-            const oddsEls = clone.querySelectorAll('[data-testid="outcome-button-odds"], .outcome-odds');
-            oddsEls.forEach(el => el.remove());
-            rawText = clone.textContent.trim();
-        }
-    }
-
-    // Cleaning
-    let clean = (t) => {
-        if (!t) return "";
-        let c = t.replace(/\n/g, ' ');
-        c = c.replace(/¢/g, '');
-        // Remove trailing odds numbers
-        c = c.replace(/\s+\d+(\.\d+)?\s*$/, '');
-        c = c.replace(/\s+\d+\s*$/, '');
-        return c.trim().toUpperCase();
-    };
-
-    let finalName = clean(rawText);
-
-    // Strategy 2: Context/Sibling Search (For Stake/SX Grid Layouts)
-    // If name is empty or just numeric (e.g. "1.90"), look around.
-    const isNumeric = /^\d+(\.\d+)?$/.test(finalName.replace(/[^\d.]/g, ''));
-
-    if (finalName.length < 2 || isNumeric) {
-        // Look at previous sibling in the row
-        // Parent?
-        const parent = element.parentElement;
-        if (parent) {
-            // Check previous siblings of the element
-            let sibling = element.previousElementSibling;
-            while (sibling) {
-                // Ignore other buttons/odds
-                const sText = sibling.textContent.trim();
-                const sClean = clean(sText);
-
-                // If it looks like a name (letters, longer than 2 chars)
-                if (sClean.length > 2 && /[A-Z]/.test(sClean) && !/^\d+(\.\d+)?$/.test(sText)) {
-                    finalName = sClean;
-                    break;
-                }
-                sibling = sibling.previousElementSibling;
-            }
-
-            // If still not found, try Parent's previous sibling (Row Label case)
-            if (finalName.length < 2 || isNumeric) {
-                let parentSibling = parent.previousElementSibling;
-                if (parentSibling) {
-                    const pText = parentSibling.textContent.trim();
-                    const pClean = clean(pText);
-                    if (pClean.length > 2 && /[A-Z]/.test(pClean)) {
-                        finalName = pClean;
-                    }
-                }
+        if (nameEl) rawText = nameEl.textContent;
+        else {
+            if (element.cloneNode) {
+                const clone = element.cloneNode(true);
+                const oddsEls = clone.querySelectorAll('[data-testid="outcome-button-odds"], .outcome-odds');
+                oddsEls.forEach(el => el.remove());
+                rawText = clone.textContent.trim();
+            } else {
+                rawText = element.textContent;
             }
         }
     }
+    return cleanName(rawText);
+}
 
-    // Final Validation
-    if (finalName.length < 1) return null;
+function handleMouseOut(e) {
+    if (hoveredElement && (e.target === hoveredElement || hoveredElement.contains(e.target))) {
+        hideTooltip();
+    }
+}
 
-    return finalName;
+function updateTooltipPosition(e) {
+    if (tooltip.style.display === 'block') {
+        tooltip.style.top = (e.clientY + 12) + 'px';
+        tooltip.style.left = (e.clientX + 12) + 'px';
+    }
+}
+
+function showTooltip(element, odds) {
+    if (hoveredElement === element) return;
+
+    if (hoveredElement) {
+        hoveredElement.style.border = hoveredElement.dataset.origBorder || '';
+    }
+
+    hoveredElement = element;
+
+    // Highlight
+    element.dataset.origBorder = element.style.border || '';
+    element.style.border = '2px solid #4CAF50';
+
+    // Text: "Opponent > 2.55"
+    tooltip.textContent = `Opponent > ${odds}`;
+
+    tooltip.style.display = 'block';
+}
+
+function hideTooltip() {
+    if (tooltip) tooltip.style.display = 'none';
+    if (hoveredElement) {
+        hoveredElement.style.border = hoveredElement.dataset.origBorder || '';
+        hoveredElement = null;
+    }
+}
+
+// Helper to get siblings' text for context
+function getContextSiblings(element) {
+    // Go up to a container row/card
+    let parent = element.parentElement;
+    const siblings = [];
+
+    // Traverse up max 3 levels to find a group
+    for (let i = 0; i < 3; i++) {
+        if (!parent) break;
+        const candidates = parent.querySelectorAll('span, div, button, [role="button"]');
+        candidates.forEach(c => {
+            if (c === element || c.contains(element) || element.contains(c)) return;
+            const t = c.textContent.trim();
+            if (t.length > 2 && !t.includes(':') && !t.includes('%')) {
+                siblings.push(t.toUpperCase());
+            }
+        });
+        if (siblings.length > 0) break;
+        parent = parent.parentElement;
+    }
+    return siblings;
 }
 
 function findOpponentOdds(myName, list, contextSiblings = []) {
     if (!list || list.length === 0) return null;
 
     // Helper: does string match?
+    const normalize = (str) => str.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
     const isMatch = (t1, t2) => {
         if (t1 === t2) return true;
-        if (t1.includes(t2) || t2.includes(t1)) return true;
-        // Word overlap
-        const w1 = t1.split(/\s+/).filter(w => w.length > 2);
-        const w2 = t2.split(/\s+/).filter(w => w.length > 2);
-        return w1.some(w => w2.includes(w));
+
+        // 1. Direct "Clean" Match
+        const n1 = normalize(t1);
+        const n2 = normalize(t2);
+
+        if (n1.includes(n2) || n2.includes(n1)) return true;
+
+        // 2. Token overlap
+        const tokens1 = t1.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
+        const tokens2 = t2.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
+
+        const intersection = tokens1.filter(t => tokens2.includes(t));
+        const commons = ['TEAM', 'ESPORTS', 'GAMING', 'CLUB', 'PRO', 'CLAN'];
+        const meaningful = intersection.filter(t => !commons.includes(t));
+
+        return meaningful.length > 0;
     };
 
     // 1. Search for a PAIR/Cluster that matches matches MyName AND Context
-    // We assume list is somewhat ordered [A, B, A, B] or [A, Draw, B]
-    // We scan windows of 2-3 items
-
     for (let i = 0; i < list.length - 1; i++) {
         // Window of check: i and i+1 (pair)
         const itemA = list[i];
@@ -253,24 +344,18 @@ function findOpponentOdds(myName, list, contextSiblings = []) {
             const opponentItem = myIndex === 0 ? itemB : itemA;
             const opponentName = opponentItem.team;
 
-            // Does context siblings contain the opponent?
-            // If we have context, enforce it.
             if (contextSiblings.length > 0) {
                 const contextMatch = contextSiblings.some(sib => isMatch(sib, opponentName));
                 if (contextMatch) {
                     return { team: opponentName, odds: opponentItem.odds };
                 }
             } else {
-                // No context to verify, return first plausible pair?
-                // Or continue searching for better match? 
-                // Let's return this as fallback match logic
                 return { team: opponentName, odds: opponentItem.odds };
             }
         }
     }
 
-    // Fallback: Simple index search if loop failed
-    // (Existing logic)
+    // Fallback: Simple index search
     let index = list.findIndex(item => isMatch(item.team, myName));
     if (index === -1) return null;
 
@@ -282,4 +367,3 @@ function findOpponentOdds(myName, list, contextSiblings = []) {
 
     return null;
 }
-
