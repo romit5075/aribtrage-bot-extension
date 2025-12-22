@@ -91,7 +91,8 @@ function handleMouseOver(e) {
     // Returns the decimal odds if found, or null
     const parseOddsFromText = (str) => {
         if (!str) return null;
-        // Check for Cents (e.g., "90¢", "12¢")
+
+        // 1. Check for Cents (Polymarket special: "90¢" or "12¢")
         if (isPoly && str.includes('¢')) {
             const centMatch = str.match(/(\d+)¢/);
             if (centMatch) {
@@ -100,13 +101,22 @@ function handleMouseOver(e) {
             }
         }
 
-        // Check for standalone Decimal (e.g. "1.50", "3.2")
-        // We match strict decimal pattern to avoid dates/times
-        const decMatch = str.match(/\b\d+\.\d{2}\b/);
-        if (decMatch) return parseFloat(decMatch[0]);
+        // 2. Check for Decimal Odds (Standard)
+        // Matches integers and decimals: "1.50", "2", "3.45"
+        // We scan for all matches and take the first "reasonable" one.
+        const matches = str.matchAll(/\b\d+(\.\d{1,2})?\b/g);
+        for (const match of matches) {
+            const val = parseFloat(match[0]);
+            // Valid odds range check (1.01 to 999)
+            if (!isNaN(val) && val >= 1.01 && val < 500) {
+                // If it contains a decimal, it's very likely odds.
+                if (match[0].includes('.')) return val;
 
-        // Fallback: simple text "1.5" check if very short
-        if (str.length < 6 && /^\d+(\.\d+)?$/.test(str)) return parseFloat(str);
+                // If Integer, be careful. 
+                // However, user asked for "all tags". If the text is SHORT, we assume it's odds.
+                if (str.length < 10) return val;
+            }
+        }
 
         return null;
     };
@@ -122,12 +132,13 @@ function handleMouseOver(e) {
     } else {
         // Fallback: Check traversing UP (parents)
         let temp = current;
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 6; i++) {
             if (!temp) break;
+
             // Check direct text of this parent (or its "button-like" content)
             const pText = temp.textContent.trim();
             // We allow slightly longer text (e.g. "KALMY 90¢ 1.11")
-            if (pText.length < 30) {
+            if (pText.length < 50) {
                 const pOdds = parseOddsFromText(pText);
                 if (pOdds) {
                     container = temp;
@@ -135,7 +146,7 @@ function handleMouseOver(e) {
                     break;
                 }
             }
-            // Explicit button check
+            // Explicit button check (always check buttons regardless of length, within reason)
             if (temp.tagName === 'BUTTON' || temp.getAttribute('role') === 'button') {
                 const buttonText = temp.textContent.trim();
                 const buttonOdds = parseOddsFromText(buttonText);
