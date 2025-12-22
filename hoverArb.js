@@ -92,8 +92,8 @@ function handleMouseOver(e) {
     const parseOddsFromText = (str) => {
         if (!str) return null;
 
-        // 1. Check for Cents (Polymarket special: "90¢" or "12¢")
-        if (isPoly && str.includes('¢')) {
+        // 1. Check for Cents (Universal check, just in case)
+        if (str.includes('¢')) {
             const centMatch = str.match(/(\d+)¢/);
             if (centMatch) {
                 const cents = parseInt(centMatch[1]);
@@ -103,21 +103,15 @@ function handleMouseOver(e) {
 
         // 2. Check for Decimal Odds (Standard)
         // Matches integers and decimals: "1.50", "2", "3.45"
-        // We scan for all matches and take the first "reasonable" one.
         const matches = str.matchAll(/\b\d+(\.\d{1,2})?\b/g);
         for (const match of matches) {
             const val = parseFloat(match[0]);
-            // Valid odds range check (1.01 to 999)
-            if (!isNaN(val) && val >= 1.01 && val < 500) {
-                // If it contains a decimal, it's very likely odds.
+            if (!isNaN(val) && val >= 1.01 && val < 999) { // Increased upper limit
                 if (match[0].includes('.')) return val;
-
-                // If Integer, be careful. 
-                // However, user asked for "all tags". If the text is SHORT, we assume it's odds.
-                if (str.length < 10) return val;
+                // If Integer, trust it if text is reasonably short
+                if (str.length < 15) return val;
             }
         }
-
         return null;
     };
 
@@ -132,13 +126,13 @@ function handleMouseOver(e) {
     } else {
         // Fallback: Check traversing UP (parents)
         let temp = current;
-        for (let i = 0; i < 6; i++) {
+        for (let i = 0; i < 5; i++) { // 5 levels up max
             if (!temp) break;
 
             // Check direct text of this parent (or its "button-like" content)
             const pText = temp.textContent.trim();
-            // We allow slightly longer text (e.g. "KALMY 90¢ 1.11")
-            if (pText.length < 50) {
+            // Allow denser containers but not massive blocks
+            if (pText.length < 60) {
                 const pOdds = parseOddsFromText(pText);
                 if (pOdds) {
                     container = temp;
@@ -179,26 +173,43 @@ function handleMouseOver(e) {
 
 // Helper: robustly find team name by looking UP and AROUND the odds element
 function findTeamNameFromOddsContext(oddsElement, isPoly) {
-    // 1. Try legacy inner-extraction first (if it's a known button type)
+    // 1. Try legacy inner-extraction first
     let legacy = extractTeamName(oddsElement, isPoly);
     if (legacy && legacy.length > 1 && !/^\d/.test(legacy)) return legacy;
 
     // 2. Search Upwards for Neighboring Info
     let parent = oddsElement.parentElement;
 
-    // We scan UP to 8 levels to find the "Card" or "Row"
-    for (let i = 0; i < 8; i++) {
+    // Scan scope - limit to 5 levels to avoid grabbing "Table" or "List" scope
+    for (let i = 0; i < 5; i++) {
         if (!parent) return null;
 
-        // A. Check for explicit name elements in this scope (Polymarket / common patterns)
+        // A. Check Siblings in this scope (Prioritize near siblings)
+        // This prevents querySelector from jumping to the first item in a large list
+        const siblings = Array.from(parent.children);
+        for (let sib of siblings) {
+            if (sib === oddsElement || sib.contains(oddsElement)) continue;
+
+            let t = sib.textContent.trim();
+            if (!t || /^\d+(\.\d+)?$/.test(t) || t.includes(':') || t.includes('%')) continue;
+
+            // Heuristic: Capital letters + length
+            if (t.length > 2 && /[A-Z]/.test(t)) {
+
+                const c = cleanName(t);
+                if (c) return c;
+            }
+        }
+
+        // B. Check Explicit Selectors (Secondary priority to avoid scope creep)
         if (isPoly) {
+            // Check ONLY direct children or close descendants if possible
             const op = parent.querySelector('.opacity-70');
             if (op) {
                 const t = cleanName(op.textContent);
                 if (t) return t;
             }
         } else {
-            // Stake specific testid
             const nameEl = parent.querySelector('[data-testid="outcome-button-name"]');
             if (nameEl) {
                 const t = cleanName(nameEl.textContent);
@@ -206,32 +217,10 @@ function findTeamNameFromOddsContext(oddsElement, isPoly) {
             }
         }
 
-        // B. Check Siblings in this scope (Row/Card scanning)
-        // Look for any sibling that has text which is NOT odds
-        // This is generic handling for "Grid" layouts where Name is a separate div from Odds div
-        if (parent.children) {
-            const siblings = Array.from(parent.children);
-            for (let sib of siblings) {
-                // Don't look at myself (or the branch containing myself)
-                if (sib === oddsElement || sib.contains(oddsElement)) continue;
-
-                let t = sib.textContent.trim();
-                // skip if empty or looks like odds
-                if (!t || /^\d+(\.\d+)?$/.test(t)) continue;
-                if (t.includes(':') || t.includes('%')) continue; // skip clocks/percentages
-
-                // Heuristic: Capital letters + length
-                if (t.length > 2 && /[A-Z]/.test(t)) {
-                    const c = cleanName(t);
-                    if (c) return c;
-                }
-            }
-        }
-
-        // C. Previous Sibling of Parent? (Row Label for a set of buttons)
+        // C. Previous Sibling of Parent? (Row Label)
         if (parent.previousElementSibling) {
-            let prev = parent.previousElementSibling;
-            let t = prev.textContent.trim();
+            const prev = parent.previousElementSibling;
+            const t = prev.textContent.trim();
             if (t.length > 2 && /[A-Z]/.test(t) && !/^\d+(\.\d+)?$/.test(t)) {
                 const c = cleanName(t);
                 if (c) return c;
