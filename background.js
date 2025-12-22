@@ -90,11 +90,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === "open_and_click") {
-        const { url, team } = request;
+        const { url, team, id } = request;
 
-        // Helper to trigger click
-        const triggerClick = (tabId) => {
-            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team });
+        // Helper to trigger click with retry
+        const triggerClick = (tabId, retries = 3) => {
+            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.log("Msg error (likely content script not ready):", chrome.runtime.lastError.message);
+                    if (retries > 0) {
+                        console.log("Retrying click in 500ms...");
+                        setTimeout(() => triggerClick(tabId, retries - 1), 500);
+                    }
+                } else {
+                    console.log("Click command sent successfully");
+                }
+            });
         };
 
         // 1. Check if tab exists

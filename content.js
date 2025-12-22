@@ -65,7 +65,8 @@ function scrapePageData() {
                     team,
                     odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
                     source: 'Poly',
-                    link: link
+                    link: link,
+                    id: btn.id // Capture ID
                 });
             }
         });
@@ -232,33 +233,47 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         console.log("Attempting to auto-click bet for:", targetTeam);
 
-        // Try Poly Buttons
-        const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
-        let clicked = false;
-
-        polyButtons.forEach(btn => {
-            if (clicked) return;
-            // Robust check using same logic as scraper
-            let team = 'UNKNOWN';
-            const teamNode = btn.querySelector('.opacity-70');
-            if (teamNode) {
-                team = teamNode.textContent.trim().toUpperCase();
-            } else {
-                const txt = btn.textContent.trim().toUpperCase();
-                const match = txt.match(/^([A-Z]{3})/);
-                if (match) team = match[1];
-                else team = txt; // fallback to full text
-            }
-
-            if (team === targetTeam || team.includes(targetTeam) || targetTeam.includes(team)) {
-                console.log("Found Poly Button, Clicking:", btn);
-                btn.click();
+        // 1. Try ID Match First
+        if (targetId) {
+            const exactBtn = document.getElementById(targetId);
+            if (exactBtn) {
+                console.log("Found Button by ID, Clicking:", exactBtn);
+                exactBtn.click();
+                exactBtn.style.border = "3px solid red";
+                setTimeout(() => exactBtn.style.border = "", 2000);
                 clicked = true;
-                // Add visual feedback
-                btn.style.border = "3px solid red";
-                setTimeout(() => btn.style.border = "", 2000);
+                return;
             }
-        });
+        }
+
+        // 2. Try Poly Buttons (Text Match)
+        if (!clicked) {
+            const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+
+            polyButtons.forEach(btn => {
+                if (clicked) return;
+                // Robust check using same logic as scraper
+                let team = 'UNKNOWN';
+                const teamNode = btn.querySelector('.opacity-70');
+                if (teamNode) {
+                    team = teamNode.textContent.trim().toUpperCase();
+                } else {
+                    const txt = btn.textContent.trim().toUpperCase();
+                    const match = txt.match(/^([A-Z]{3})/);
+                    if (match) team = match[1];
+                    else team = txt;
+                }
+
+                if (team === targetTeam || (targetTeam && (team.includes(targetTeam) || targetTeam.includes(team)))) {
+                    console.log("Found Poly Button by Text, Clicking:", btn);
+                    btn.click();
+                    clicked = true;
+                    // Add visual feedback
+                    btn.style.border = "3px solid red";
+                    setTimeout(() => btn.style.border = "", 2000);
+                }
+            });
+        }
 
         // Try Stake Buttons
         if (!clicked) {

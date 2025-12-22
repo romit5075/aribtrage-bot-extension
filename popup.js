@@ -14,13 +14,17 @@ document.addEventListener('DOMContentLoaded', () => {
             let team = text.split(':')[1];
             if (team) team = team.trim();
 
+            // Extract ID
+            const btnId = e.target.getAttribute('data-id');
+
             if (url && url !== '#' && url !== 'undefined') {
                 // chrome.tabs.create({ url: url });
                 // New Flow: Send to background to open AND click
                 chrome.runtime.sendMessage({
                     action: "open_and_click",
                     url: url,
-                    team: team
+                    team: team,
+                    id: btnId
                 });
             } else {
                 alert("Link not available. Please rescan.");
@@ -490,8 +494,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             <td colspan="2" style="font-size:10px; color:#95a5a6">-</td>
                              <td style="text-align: left;">
                                 <div style="margin-bottom:2px">
-                                    <button class="bet-btn poly-btn" data-link="${home.link}">P: ${trunc(home.team)}</button>
-                                    <button class="bet-btn poly-btn" data-link="${away.link}">P: ${trunc(away.team)}</button>
+                                    <button class="bet-btn poly-btn" data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn poly-btn" data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
                                 </div>
                                 <div>
                                     <button class="bet-btn stake-btn" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
@@ -532,8 +536,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             <td class="${arb2.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb2.profit}%</td>
                              <td style="text-align: left; min-width: 120px;">
                                 <div style="margin-bottom:3px">
-                                    <button class="bet-btn poly-btn" style="${arb1.profit > 0 ? 'border:1px solid red' : ''}" data-link="${home.link}">P: ${trunc(home.team)}</button>
-                                    <button class="bet-btn poly-btn" style="${arb2.profit > 0 ? 'border:1px solid red' : ''}" data-link="${away.link}">P: ${trunc(away.team)}</button>
+                                    <button class="bet-btn poly-btn" style="${arb1.profit > 0 ? 'border:1px solid red' : ''}" data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn poly-btn" style="${arb2.profit > 0 ? 'border:1px solid red' : ''}" data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
                                 </div>
                                 <div>
                                     <button class="bet-btn stake-btn" style="${arb2.profit > 0 ? 'border:1px solid red' : ''}" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
@@ -570,8 +574,8 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td style="color:#aaa">-</td>
                          <td style="text-align: left;">
                             <div style="margin-bottom:2px">
-                                <button class="bet-btn poly-btn" data-link="${home.link}">P: ${trunc(home.team)}</button>
-                                <button class="bet-btn poly-btn" data-link="${away.link}">P: ${trunc(away.team)}</button>
+                                <button class="bet-btn poly-btn" data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
+                                <button class="bet-btn poly-btn" data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
                             </div>
                             ${stakeHome ? `
                             <div>
