@@ -245,11 +245,18 @@ document.addEventListener('DOMContentLoaded', () => {
                             const matchDecimal = btn.textContent.match(/(\d+\.\d{2})/);
                             let odds = null;
 
-                            if (matchCents) {
-                                const cents = parseInt(matchCents[1], 10);
-                                if (cents > 0) odds = (100 / cents).toFixed(2);
-                            } else if (matchDecimal) {
-                                odds = parseFloat(matchDecimal[1]);
+                            // Check for suspended/unavailable
+                            const txt = btn.textContent.toLowerCase();
+                            if (txt.includes('suspended') || txt.includes('unavailable') || btn.disabled) {
+                                odds = 'Suspended';
+                                console.log(`Found suspended/unavailable odds for team ${team}`);
+                            } else {
+                                if (matchCents) {
+                                    const cents = parseInt(matchCents[1], 10);
+                                    if (cents > 0) odds = (100 / cents).toFixed(2);
+                                } else if (matchDecimal) {
+                                    odds = parseFloat(matchDecimal[1]);
+                                }
                             }
 
                             const linkEl = btn.closest('a');
@@ -504,37 +511,39 @@ document.addEventListener('DOMContentLoaded', () => {
                     const n2 = clean(item.team.toUpperCase());
                     let score = 0;
 
-                    // A. Exact Substring (High Confidence)
+                    // A. Exact Substring (Higher Confidence)
                     if (n1.includes(n2) || n2.includes(n1)) {
-                        score += 60; // Immediate winner usually
+                        score += 60;
                     }
 
-                    // B. Token Overlap (Refined)
-                    // "SNG2 Sangal" vs "Sangal Esports" -> "Sangal" is key
-                    // "NEM Team Nemesis" vs "Team Nemesis" -> "Team", "Nemesis" are keys
-                    const t1 = n1.split(' ').filter(t => t.length > 2);
-                    const t2 = n2.split(' ').filter(t => t.length > 2);
+                    // B. Prefix Match (Restored)
+                    // "LNG LnG" vs "LNG Esports" -> Both start with "LNG"
+                    if (n1.split(' ')[0] === n2.split(' ')[0] && n1.split(' ')[0].length >= 3) {
+                        score += 30;
+                    }
 
-                    let matchingTokens = 0;
-                    let totalRelevant = Math.min(t1.length, t2.length);
+                    // C. Token Overlap (Refined)
+                    // Remove duplicates in tokens: "LNG LNG" -> ["LNG"]
+                    const uniqueTokens = (str) => [...new Set(str.split(' ').filter(t => t.length > 2))];
+                    const t1 = uniqueTokens(n1);
+                    const t2 = uniqueTokens(n2);
+
+                    let matches = 0;
+                    let strongMatches = 0;
 
                     t1.forEach(token => {
-                        if (t2.includes(token)) matchingTokens++;
+                        if (t2.includes(token)) {
+                            matches++;
+                            if (token.length > 3) strongMatches++;
+                        }
                     });
 
-                    if (matchingTokens > 0) {
-                        // Significant Match: If we match > 50% of the smaller set, or IF we match a very specific long word (>5 chars)
-                        // "Sangal" (6) matches -> Good.
-                        // "Team" (4) matches -> Okay.
-                        if (t1.some(t => t.length > 4 && t2.includes(t))) {
-                            score += 50; // Strong word match
-                        } else {
-                            score += (matchingTokens / totalRelevant) * 45;
-                        }
+                    if (matches > 0) {
+                        score += (matches * 20); // Base points for any shared token
+                        if (strongMatches > 0) score += 20; // Bonus for explicit names
                     }
 
-                    // C. Ticker Handling (Pattern: "XYZ Name")
-                    // If n1 starts with short prefix check rest
+                    // D. Ticker Handling
                     const removeTicker = (s) => {
                         const parts = s.split(' ');
                         if (parts.length > 1 && parts[0].length <= 5) return parts.slice(1).join(' ');
@@ -543,10 +552,14 @@ document.addEventListener('DOMContentLoaded', () => {
                     const n1_noTick = removeTicker(n1);
                     const n2_noTick = removeTicker(n2);
 
-                    if (n1_noTick !== n1 || n2_noTick !== n2) {
+                    if (n1 !== n1_noTick || n2 !== n2_noTick) {
                         if (n1_noTick === n2_noTick || n1_noTick.includes(n2_noTick) || n2_noTick.includes(n1_noTick)) {
                             score += 45;
                         }
+                    }
+
+                    if (score > 30) {
+                        console.log(`Comparing '${n1}' vs '${n2}' -> Score: ${score}`);
                     }
 
                     if (score > bestScore) {
