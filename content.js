@@ -228,21 +228,68 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === "click_bet_button") {
-        const targetTeam = request.team ? request.team.toUpperCase() : null;
-        if (!targetTeam) return;
+        sendResponse({ status: "received" }); // CHANGE: Immediate response to stop background retries
 
-        console.log("Attempting to auto-click bet for:", targetTeam);
+        const targetTeam = request.team ? request.team.toUpperCase() : null;
+        const targetId = request.id;
+        let clicked = false;
+
+        // Debug Counter
+        if (!window.autoClickCount) window.autoClickCount = 0;
+        window.autoClickCount++;
+        console.log(`%c[AutoClick] Request Received. Total Attempts: ${window.autoClickCount}`, "color: yellow; font-size: 14px; font-weight: bold;");
+
+        if (!targetTeam && !targetId) return;
+
+        console.log("Attempting to auto-click bet for:", targetTeam, "ID:", targetId);
+
+        // Helper to robustly click
+        // Helper to robustly click (Mainly for Poly/React)
+        const robustClick = (el) => {
+            console.log("--- ROBUST CLICK SEQUENCE START ---");
+            console.log("Target:", el);
+            el.scrollIntoView({ behavior: 'auto', block: 'center' });
+
+            const pOpts = {
+                bubbles: true, cancelable: true, view: window,
+                pointerId: 1, width: 1, height: 1, pressure: 0.5,
+                isPrimary: true
+            };
+
+            console.log("Dispatching: pointerdown");
+            el.dispatchEvent(new PointerEvent('pointerdown', pOpts));
+
+            console.log("Dispatching: mousedown");
+            el.dispatchEvent(new PointerEvent('mousedown', pOpts));
+
+            console.log("Dispatching: pointerup");
+            el.dispatchEvent(new PointerEvent('pointerup', pOpts));
+
+            console.log("Dispatching: mouseup");
+            el.dispatchEvent(new PointerEvent('mouseup', pOpts));
+
+            console.log("Executing: Native .click()");
+            el.click();
+
+            console.log("--- ROBUST CLICK SEQUENCE END ---");
+
+            // Visual
+            el.style.border = "4px solid red";
+            setTimeout(() => {
+                el.style.border = "";
+            }, 2000);
+        };
+
+
 
         // 1. Try ID Match First
         if (targetId) {
             const exactBtn = document.getElementById(targetId);
             if (exactBtn) {
-                console.log("Found Button by ID, Clicking:", exactBtn);
-                exactBtn.click();
-                exactBtn.style.border = "3px solid red";
-                setTimeout(() => exactBtn.style.border = "", 2000);
+                console.log("Found Button by ID");
+                robustClick(exactBtn);
                 clicked = true;
-                return;
+                // fall through to auto-fill
             }
         }
 
@@ -265,17 +312,49 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 }
 
                 if (team === targetTeam || (targetTeam && (team.includes(targetTeam) || targetTeam.includes(team)))) {
-                    console.log("Found Poly Button by Text, Clicking:", btn);
-                    btn.click();
+                    console.log("Found Poly Button by Text match:", team);
+                    robustClick(btn);
                     clicked = true;
-                    // Add visual feedback
-                    btn.style.border = "3px solid red";
-                    setTimeout(() => btn.style.border = "", 2000);
                 }
             });
         }
 
-        // Try Stake Buttons
+        // ---- Auto-Fill Polymarket (if clicked) ----
+        if (clicked && !document.querySelector('.outcome-content')) { // Ensure we are on Poly (outcome-content is Stake)
+            const attemptFillPoly = (attempts = 0) => {
+                if (attempts > 20) return;
+
+                // Selector based on User provided HTML: placeholder="$0" is distinctive for the amount input
+                const input = document.querySelector('input[placeholder="$0"]');
+
+                // Button: User said "Deposit", provided HTML showing class "trading-button" and data-color="blue"
+                // We'll look for the primary blue action button in the sidebar/modal
+                const actionBtn = document.querySelector('button[data-color="blue"]');
+
+                if (input && actionBtn) {
+                    console.log("Found Poly Bet Slip Inputs");
+
+                    // 1. Enter Amount "0.01" (React Native Setter)
+                    input.focus();
+                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                    nativeInputValueSetter.call(input, "0.01");
+
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+                    // 2. Click Action Button (Deposit/Buy)
+                    setTimeout(() => {
+                        console.log("Clicking Action Button on Poly...");
+                        robustClick(actionBtn); // Use robust click for Poly buttons
+                    }, 1000);
+                } else {
+                    setTimeout(() => attemptFillPoly(attempts + 1), 500);
+                }
+            };
+            attemptFillPoly();
+        }
+
+        // 3. Try Stake Buttons
         if (!clicked) {
             const stackItems = document.querySelectorAll('.outcome-content');
             stackItems.forEach(item => {
@@ -287,11 +366,53 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         const btn = item.closest('button');
                         if (btn) {
                             console.log("Found Stake Button, Clicking:", btn);
+                            // Stake only needs native click. Pointer events might cause double trigger.
+                            btn.scrollIntoView({ behavior: 'auto', block: 'center' });
                             btn.click();
+
                             clicked = true;
                             // Add visual feedback
                             btn.style.border = "3px solid red";
                             setTimeout(() => btn.style.border = "", 2000);
+
+                            // ---- Auto-Fill Stake Bet Slip ----
+                            const attemptFillStake = (attempts = 0) => {
+                                if (attempts > 20) return; // Stop after 10s
+
+                                const input = document.querySelector('input[data-testid="input-bet-amount"]');
+                                const placeBtn = document.querySelector('button[data-testid="betSlip-place-bets-button"]');
+
+                                if (input && placeBtn) {
+                                    console.log("Found Stake Bet Slip Inputs");
+
+                                    // 1. Enter Amount "0.01" (Simulate Typing)
+                                    input.focus();
+                                    // Native value setter for React inputs
+                                    const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                                    nativeInputValueSetter.call(input, "0.01");
+
+                                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                                    input.dispatchEvent(new Event('change', { bubbles: true }));
+
+                                    // 2. Click Place Bet (Delay slightly to let validation happen)
+                                    setTimeout(() => {
+                                        if (!placeBtn.disabled) {
+                                            console.log("Clicking 'Place Bet' on Stake...");
+                                            placeBtn.click();
+                                        } else {
+                                            console.log("Place Bet button is disabled (Login/Funds?) -> Highlighting it");
+                                            placeBtn.style.border = "2px solid red";
+                                        }
+                                    }, 1000);
+
+                                } else {
+                                    // Retry looking for sidebar
+                                    setTimeout(() => attemptFillStake(attempts + 1), 500);
+                                }
+                            };
+
+                            // Start looking for bet slip
+                            attemptFillStake();
                         }
                     }
                 }

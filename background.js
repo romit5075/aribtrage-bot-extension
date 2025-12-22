@@ -95,14 +95,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Helper to trigger click with retry
         const triggerClick = (tabId, retries = 3) => {
             chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id }, (response) => {
-                if (chrome.runtime.lastError) {
-                    console.log("Msg error (likely content script not ready):", chrome.runtime.lastError.message);
-                    if (retries > 0) {
+                const err = chrome.runtime.lastError;
+                if (err) {
+                    // Ignore "port closed" error as it usually means listener existed but closed (success-ish)
+                    // But if we want to be strict, we only retry on meaningful connection errors
+                    console.log("Msg error:", err.message);
+
+                    if (retries > 0 && !err.message.includes("closed before a response")) {
                         console.log("Retrying click in 500ms...");
                         setTimeout(() => triggerClick(tabId, retries - 1), 500);
                     }
                 } else {
-                    console.log("Click command sent successfully");
+                    console.log("Click command sent & acknowledged");
                 }
             });
         };
