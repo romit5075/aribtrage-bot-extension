@@ -82,27 +82,41 @@ function handleMouseOver(e) {
 
     if (!isPoly && !isStack) return;
 
-    // Traverse upwards to find a valid container (increased to 15)
+    // Traverse upwards to find a valid container
     let container = null;
     let current = e.target;
+    let foundRef = null;
+
+    // 1. Text Check: Does the hovered element look like odds?
+    const text = current.textContent.trim();
+    const isOddsText = /^\d+(\.\d+)?$/.test(text) && text.length < 6;
 
     for (let i = 0; i < 15; i++) {
-        if (!current || !current.getAttribute) break; // Stop at document root or text nodes if unhandled
+        if (!current || !current.getAttribute) break;
 
-        // Checks
+        // Identification Checks
         const testId = current.getAttribute('data-testid');
         const role = current.getAttribute('role');
         const isButton = current.tagName === 'BUTTON';
-        // Polymarket specific classes for outcome buttons
+
+        // Polymarket Outcome
         const isPolyOutcome = current.classList && (
             current.classList.contains('c-b-c') ||
-            current.classList.contains('c-b-c-S') || // potential variants
-            current.tagName === 'BUTTON'
+            current.classList.contains('c-b-c-S') ||
+            (isButton && current.querySelector('.opacity-70')) // Poly often puts name in opacity-70
         );
 
-        if (isButton || role === 'button' || testId === 'outcome-content' || isPolyOutcome) {
+        // General Sportsbook Odds Button
+        const isOddsButton = isButton ||
+            role === 'button' ||
+            testId === 'outcome-content' ||
+            current.classList.contains('outcome-odds');
+
+        if (isPolyOutcome || isOddsButton || (isOddsText && i < 3)) { // Allow text span if close to leaf
+            // If we found a container that seems relevant
             container = current;
-            break;
+            // If we hit a definitive button, stop
+            if (isButton || role === 'button') break;
         }
 
         current = current.parentNode;
@@ -110,7 +124,7 @@ function handleMouseOver(e) {
 
     if (!container) return;
 
-    // 1. Get Team Name
+    // 1. Get Team Name (Robust Context Search)
     const teamName = extractTeamName(container, isPoly);
     if (!teamName) return;
 
@@ -122,82 +136,14 @@ function handleMouseOver(e) {
     const opponentFunc = findOpponentOdds(teamName, otherList, contextSiblings);
 
     if (opponentFunc) {
-        showTooltip(container, opponentFunc.odds); // Removed name from arg, logic inside uses it
+        showTooltip(container, opponentFunc.odds);
     }
-}
-
-function handleMouseOut(e) {
-    if (hoveredElement && (e.target === hoveredElement || hoveredElement.contains(e.target))) {
-        hideTooltip();
-    }
-}
-
-function updateTooltipPosition(e) {
-    if (tooltip.style.display === 'block') {
-        // Offset to bottom-right of cursor to be non-intrusive but visible
-        tooltip.style.top = (e.clientY + 12) + 'px';
-        tooltip.style.left = (e.clientX + 12) + 'px';
-    }
-}
-
-function showTooltip(element, odds, opponentName) {
-    if (hoveredElement === element) return;
-
-    if (hoveredElement) {
-        hoveredElement.style.border = ''; // Reset previous
-    }
-
-    hoveredElement = element;
-
-    // Highlight
-    element.dataset.origBorder = element.style.border;
-    element.style.border = '2px solid #4CAF50';
-
-    // Text: "Opponent > 2.55"
-    tooltip.textContent = `Opponent > ${odds}`;
-
-    tooltip.style.display = 'block';
-}
-
-function hideTooltip() {
-    if (tooltip) tooltip.style.display = 'none';
-    if (hoveredElement) {
-        element = hoveredElement;
-        element.style.border = element.dataset.origBorder || '';
-        hoveredElement = null;
-    }
-}
-
-// Helper to get siblings' text for context
-function getContextSiblings(element) {
-    // Go up to a container row/card
-    let parent = element.parentElement;
-    const siblings = [];
-
-    // Traverse up max 3 levels to find a group
-    for (let i = 0; i < 3; i++) {
-        if (!parent) break;
-        // Check for text nodes or other buttons in this parent
-        // This is a heuristic: finding other capitalized text or buttons might indicate opponents
-        const candidates = parent.querySelectorAll('span, div, button, [role="button"]');
-        candidates.forEach(c => {
-            if (c === element || c.contains(element) || element.contains(c)) return;
-            // Extract text
-            const t = c.textContent.trim();
-            // Filter out junk
-            if (t.length > 2 && !t.includes(':') && !t.includes('%')) {
-                siblings.push(t.toUpperCase());
-            }
-        });
-        if (siblings.length > 0) break; // Found a layer with content
-        parent = parent.parentElement;
-    }
-    return siblings;
 }
 
 function extractTeamName(element, isPoly) {
     let rawText = "";
 
+    // Strategy 1: Internal Search (Works for Poly & Standard Buttons)
     if (isPoly) {
         const op = element.querySelector('.opacity-70');
         if (op) rawText = op.textContent;
@@ -207,25 +153,69 @@ function extractTeamName(element, isPoly) {
         if (nameEl) {
             rawText = nameEl.textContent;
         } else {
+            // Clone to avoid mutation logic issues
             const clone = element.cloneNode(true);
             const oddsEls = clone.querySelectorAll('[data-testid="outcome-button-odds"], .outcome-odds');
             oddsEls.forEach(el => el.remove());
-            rawText = clone.textContent;
+            rawText = clone.textContent.trim();
         }
     }
 
-    if (!rawText) return null;
+    // Cleaning
+    let clean = (t) => {
+        if (!t) return "";
+        let c = t.replace(/\n/g, ' ');
+        c = c.replace(/¢/g, '');
+        // Remove trailing odds numbers
+        c = c.replace(/\s+\d+(\.\d+)?\s*$/, '');
+        c = c.replace(/\s+\d+\s*$/, '');
+        return c.trim().toUpperCase();
+    };
 
-    let clean = rawText.replace(/\n/g, ' ');
-    clean = clean.replace(/¢/g, '');
-    clean = clean.replace(/\s+\d+(\.\d+)?\s*$/, '');
-    clean = clean.replace(/\s+\d+\s*$/, '');
-    clean = clean.trim().toUpperCase();
+    let finalName = clean(rawText);
 
-    // Allow numbers if 1 or 2 (often used for markets), otherwise > 1 char
-    if (clean.length < 1) return null;
+    // Strategy 2: Context/Sibling Search (For Stake/SX Grid Layouts)
+    // If name is empty or just numeric (e.g. "1.90"), look around.
+    const isNumeric = /^\d+(\.\d+)?$/.test(finalName.replace(/[^\d.]/g, ''));
 
-    return clean;
+    if (finalName.length < 2 || isNumeric) {
+        // Look at previous sibling in the row
+        // Parent?
+        const parent = element.parentElement;
+        if (parent) {
+            // Check previous siblings of the element
+            let sibling = element.previousElementSibling;
+            while (sibling) {
+                // Ignore other buttons/odds
+                const sText = sibling.textContent.trim();
+                const sClean = clean(sText);
+
+                // If it looks like a name (letters, longer than 2 chars)
+                if (sClean.length > 2 && /[A-Z]/.test(sClean) && !/^\d+(\.\d+)?$/.test(sText)) {
+                    finalName = sClean;
+                    break;
+                }
+                sibling = sibling.previousElementSibling;
+            }
+
+            // If still not found, try Parent's previous sibling (Row Label case)
+            if (finalName.length < 2 || isNumeric) {
+                let parentSibling = parent.previousElementSibling;
+                if (parentSibling) {
+                    const pText = parentSibling.textContent.trim();
+                    const pClean = clean(pText);
+                    if (pClean.length > 2 && /[A-Z]/.test(pClean)) {
+                        finalName = pClean;
+                    }
+                }
+            }
+        }
+    }
+
+    // Final Validation
+    if (finalName.length < 1) return null;
+
+    return finalName;
 }
 
 function findOpponentOdds(myName, list, contextSiblings = []) {
