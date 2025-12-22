@@ -247,8 +247,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 statusText.textContent = `No ${expectedType} data found.`;
                 updateStatusTick(expectedType, false);
             } else {
-                statusText.textContent = `Scraped ${foundData.odds.length} ${expectedType} odds.`;
+                statusText.textContent = `Scraped ${foundData.odds.length} ${expectedType} odds from ${tab.url}`;
                 updateStatusTick(expectedType, true);
+
+                // Show URL in status box
+                const urlDisplayId = expectedType === 'polymarket' ? 'polyUrlDisplay' : 'stakeUrlDisplay';
+                const urlDisp = document.getElementById(urlDisplayId);
+                if (urlDisp) {
+                    urlDisp.textContent = new URL(tab.url).pathname; // Just show path for brevity
+                    urlDisp.title = tab.url; // Tooltip full url
+                }
 
                 // Send to background to process/store
                 chrome.runtime.sendMessage({
@@ -283,13 +291,29 @@ document.addEventListener('DOMContentLoaded', () => {
     // 3. Reset / Clear Button Handler
     if (clearBtn) {
         clearBtn.addEventListener('click', () => {
-            chrome.storage.local.remove(['polymarketData', 'stackData'], () => {
+            chrome.storage.local.remove(['polymarketData', 'stackData', 'lastPolyUrl', 'lastStackUrl'], () => {
                 if (statusText) statusText.textContent = "Data cleared.";
-                // Reset UI Ticks
-                updateStatusTick('polymarket', false);
-                updateStatusTick('stack', false);
-                document.getElementById('polyTick').textContent = "⬜";
-                document.getElementById('stakeTick').textContent = "⬜";
+                // Reset UI Ticks to neutral state (e.g., small dash or empty)
+                const neutralIcon = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="#bdc3c7" stroke-width="2"/></svg>`;
+
+                const pTick = document.getElementById('polyTick');
+                const sTick = document.getElementById('stakeTick');
+
+                if (pTick) pTick.innerHTML = neutralIcon;
+                if (sTick) sTick.innerHTML = neutralIcon;
+
+                // Reset Status Box Color/Opacity
+                const pBox = document.getElementById('polyStatusBox');
+                const sBox = document.getElementById('stakeStatusBox');
+                if (pBox) { pBox.style.opacity = "0.5"; pBox.style.color = "#bdc3c7"; }
+                if (sBox) { sBox.style.opacity = "0.5"; sBox.style.color = "#bdc3c7"; }
+
+                // Clear URL display if we add it
+                const pUrl = document.getElementById('polyUrlDisplay');
+                const sUrl = document.getElementById('stakeUrlDisplay');
+                if (pUrl) pUrl.textContent = '';
+                if (sUrl) sUrl.textContent = '';
+
                 updateUI();
             });
         });
