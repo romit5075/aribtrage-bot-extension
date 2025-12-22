@@ -186,26 +186,50 @@ function trySpecificSelectors(target) {
     return null;
 }
 
-// Generic odds finder
+// Generic odds finder - promotes to container if possible
 function findOddsGeneric(target) {
     let current = target;
+    let validResult = null;
+
+    // Walk up up to 6 levels
     for (let i = 0; i < 6; i++) {
         if (!current || current.tagName === 'BODY' || current.tagName === 'HTML') break;
 
-        const fullText = current.textContent || '';
-        if (fullText.length < 50) {
-            const odds = parseOdds(fullText);
-            if (odds) return { element: current, odds };
-        }
-
+        // CHECK 1: Is this specific node a valid odds container?
         const directText = getDirectTextContent(current);
         if (directText) {
             const odds = parseOdds(directText);
-            if (odds) return { element: current, odds };
+            if (odds) {
+                // Found odds! But don't return immediately. 
+                // See if this is part of a larger button/row.
+                validResult = { element: current, odds };
+
+                // If this is a button, it's the best container. Return.
+                if (current.tagName === 'BUTTON' || current.getAttribute('role') === 'button') {
+                    return validResult;
+                }
+            }
         }
+
+        // CHECK 2: Full text (fallback)
+        if (!validResult) {
+            const fullText = current.textContent || '';
+            if (fullText.length < 50) {
+                const odds = parseOdds(fullText);
+                if (odds) validResult = { element: current, odds };
+            }
+        }
+
+        // Promotion Logic: If we found a result earlier, but we just hit a BUTTON while walking up,
+        // Upgrade the result to this button so the whole button is the "hoveredElement".
+        if (validResult && (current.tagName === 'BUTTON' || current.classList.contains('outcome-content'))) {
+            return { element: current, odds: validResult.odds };
+        }
+
         current = current.parentElement;
     }
-    return null;
+
+    return validResult;
 }
 
 function getDirectTextContent(element) {
@@ -219,7 +243,6 @@ function getDirectTextContent(element) {
 function handleMouseOver(e) {
     if (!isHoverEnabled || !tooltip) return;
 
-    // CANCEL ANY PROPOSED HIDE ACTION IMMEDIATELY
     if (hideTimeout) {
         clearTimeout(hideTimeout);
         hideTimeout = null;
@@ -228,52 +251,58 @@ function handleMouseOver(e) {
     const target = e.target;
     if (tooltip && tooltip.contains(target)) return;
 
-    // If we're inside the current element, we're good
+    // Stickiness Check 1: Inside current
     if (hoveredElement && (hoveredElement === target || hoveredElement.contains(target))) {
         return;
     }
 
-    // Try finding odds
+    // Stickiness Check 2: Current is inside target (we moved out to parent)
+    // We treat this as "still on the same thing" to prevent re-triggering
+    if (hoveredElement && target.contains(hoveredElement)) {
+        return;
+    }
+
     let result = trySpecificSelectors(target);
     if (!result) result = findOddsGeneric(target);
 
     if (!result) {
-        // We aren't on an odds element, but we might have just left one.
-        // Let handleMouseOut manage the hiding via delay.
-        return;
+        return; // handleMouseOut will deal with hiding
     }
 
     const { element, odds } = result;
 
-    // Switch to new element
-    if (element !== hoveredElement) {
-        // Force hide previous immediately to switch clean
-        if (hoveredElement) hideTooltip();
+    // If we resolved to the same element we are already ostensibly hovering (via parent/child), skip
+    if (element === hoveredElement) return;
+    if (hoveredElement && (hoveredElement.contains(element) || element.contains(hoveredElement))) return;
 
-        const requiredOdds = calculateRequiredOdds(odds);
-        if (!requiredOdds || requiredOdds > 100) return;
+    // Switch
+    if (hoveredElement) hideTooltip();
 
-        showTooltip(element, odds, requiredOdds, e);
-    }
+    const requiredOdds = calculateRequiredOdds(odds);
+    if (!requiredOdds || requiredOdds > 100) return;
+
+    showTooltip(element, odds, requiredOdds, e);
 }
 
 function handleMouseOut(e) {
     if (!hoveredElement) return;
 
-    // DEBOUNCE HIDE: 
-    // Give user 150ms to move to a child element or back into the element
-    // before we actually hide the tooltip.
-
     const relatedTarget = e.relatedTarget;
 
-    // If strictly moving inside, ignore
+    // 1. Moving to a descendent (Child) -> Valid stay
     if (relatedTarget && hoveredElement.contains(relatedTarget)) return;
+
+    // 2. Moving to an ancestor (Parent) -> Valid stay
+    // This prevents flickering when moving from "Text" to "Button" (if 'Text' was the hoveredElement)
+    if (relatedTarget && relatedTarget.contains(hoveredElement)) return;
+
+    // 3. Moving to Tooltip -> Valid stay
     if (relatedTarget && tooltip && tooltip.contains(relatedTarget)) return;
 
     // Schedule hide
     hideTimeout = setTimeout(() => {
         hideTooltip();
-    }, 150);
+    }, 250); // Increased to 250ms for smoother feel
 }
 
 function updateTooltipPosition(e) {
