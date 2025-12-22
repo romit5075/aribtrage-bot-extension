@@ -438,12 +438,31 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     // C. Token Overlap (e.g. 'Hawks' in 'Atlanta Hawks')
                     // Split by space
-                    const tokens1 = n1.split(' ').filter(t => t.length > 2);
-                    const tokens2 = n2.split(' ').filter(t => t.length > 2);
+                    const tokens1 = n1.split(/[\s-]+/).filter(t => t.length > 2);
+                    const tokens2 = n2.split(/[\s-]+/).filter(t => t.length > 2);
 
-                    if (tokens1.some(t1 => n2.includes(t1)) || tokens2.some(t2 => n1.includes(t2))) {
-                        score += 10; // Reduced from 30 to avoid false positive like 'Washington' matching 'Wizards' if both have 'Washington'
+                    let tokenScore = 0;
+                    // Check T1 tokens against T2
+                    tokens1.forEach(t1 => {
+                        if (tokens2.includes(t1)) {
+                            tokenScore += 40; // Exact token match (High Conf)
+                        } else if (n2.includes(t1)) {
+                            tokenScore += 10; // Substring match
+                        }
+                    });
+
+                    // Check T2 tokens against T1 (to catch reverse cases)
+                    if (tokenScore === 0) {
+                        tokens2.forEach(t2 => {
+                            if (tokens1.includes(t2)) {
+                                tokenScore += 40;
+                            } else if (n1.includes(t2)) {
+                                tokenScore += 10;
+                            }
+                        });
                     }
+
+                    score += Math.min(tokenScore, 45); // Cap at 45 so it alone doesn't beat 50 (Prefix) purely on one token unless strong
 
                     if (score > bestScore) {
                         bestScore = score;
