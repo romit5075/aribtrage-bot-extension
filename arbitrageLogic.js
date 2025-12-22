@@ -66,15 +66,37 @@ class ArbitrageCalculator {
         const opportunities = [];
 
         // Helper to find team in list
+        const normalize = (str) => str.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
         const findOdds = (list, name) => {
             if (strictMatch) {
                 return list.find(x => x.team === name);
             } else {
-                // Relaxed Match: Includes check
-                const n1 = name.toUpperCase();
                 return list.find(x => {
-                    const n2 = x.team.toUpperCase();
-                    return n1.includes(n2) || n2.includes(n1);
+                    // 1. Direct "Clean" Match
+                    const n1 = normalize(name);
+                    const n2 = normalize(x.team);
+
+                    if (n1.includes(n2) || n2.includes(n1)) return true;
+
+                    // 2. Token overlap (for cases like "Team A" vs "Organization Team A")
+                    // This handles cases where one string has extra words not in the other
+                    const tokens1 = name.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
+                    const tokens2 = x.team.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
+
+                    // If any significant token matches exactly? 
+                    // Or if intersection is substantial?
+                    const intersection = tokens1.filter(t => tokens2.includes(t));
+
+                    // If more than 50% of tokens match, or at least 1 unique distinct token matching
+                    // Avoid matching common words like "TEAM", "ESPORTS", "GAMING" unless that's the only word
+                    const commons = ['TEAM', 'ESPORTS', 'GAMING', 'CLUB', 'PRO', 'CLAN'];
+                    if (intersection.length > 0) {
+                        const meaningful = intersection.filter(t => !commons.includes(t));
+                        if (meaningful.length > 0) return true;
+                    }
+
+                    return false;
                 });
             }
         };
