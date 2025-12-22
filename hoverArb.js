@@ -85,32 +85,63 @@ function handleMouseOver(e) {
 
     let current = e.target;
     let container = null;
+    let detectedOdds = null;
 
-    // 1. UNIVERSAL ODDS CHECK
-    // Trigger on ANY element that looks like it contains just a decimal number (the odds)
-    const text = current.textContent.trim();
-    // Regex for Odds: Number, optional decimal, max 6 chars
-    // Examples: "1.5", "10", "3.45"
-    // Exclude long text to avoid triggering on sentences
-    const isOdds = /^\d+(\.\d{1,2})?$/.test(text) && text.length < 7;
+    // Helper to check for odds or cents in text
+    // Returns the decimal odds if found, or null
+    const parseOddsFromText = (str) => {
+        if (!str) return null;
+        // Check for Cents (e.g., "90¢", "12¢")
+        if (isPoly && str.includes('¢')) {
+            const centMatch = str.match(/(\d+)¢/);
+            if (centMatch) {
+                const cents = parseInt(centMatch[1]);
+                if (cents > 0) return (100 / cents).toFixed(2);
+            }
+        }
 
-    if (isOdds) {
+        // Check for standalone Decimal (e.g. "1.50", "3.2")
+        // We match strict decimal pattern to avoid dates/times
+        const decMatch = str.match(/\b\d+\.\d{2}\b/);
+        if (decMatch) return parseFloat(decMatch[0]);
+
+        // Fallback: simple text "1.5" check if very short
+        if (str.length < 6 && /^\d+(\.\d+)?$/.test(str)) return parseFloat(str);
+
+        return null;
+    };
+
+    // 1. UNIVERSAL CHECK
+    // Check current element
+    let t = current.textContent.trim();
+    let odds = parseOddsFromText(t);
+
+    if (odds) {
         container = current;
+        detectedOdds = odds;
     } else {
-        // Fallback: Check up to 4 parents if THEY are the "odds container"
+        // Fallback: Check traversing UP (parents)
         let temp = current;
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < 5; i++) {
             if (!temp) break;
-            const t = temp.textContent.trim();
-            if (/^\d+(\.\d{1,2})?$/.test(t) && t.length < 7) {
-                container = temp;
-                break;
+            // Check direct text of this parent (or its "button-like" content)
+            const pText = temp.textContent.trim();
+            // We allow slightly longer text (e.g. "KALMY 90¢ 1.11")
+            if (pText.length < 30) {
+                const pOdds = parseOddsFromText(pText);
+                if (pOdds) {
+                    container = temp;
+                    detectedOdds = pOdds;
+                    break;
+                }
             }
             // Explicit button check
             if (temp.tagName === 'BUTTON' || temp.getAttribute('role') === 'button') {
-                // If the button has odds inside
-                if (/^\d+(\.\d{1,2})?$/.test(temp.textContent.trim().split(' ').pop())) {
+                const buttonText = temp.textContent.trim();
+                const buttonOdds = parseOddsFromText(buttonText);
+                if (buttonOdds) {
                     container = temp;
+                    detectedOdds = buttonOdds;
                     break;
                 }
             }
@@ -118,15 +149,14 @@ function handleMouseOver(e) {
         }
     }
 
-    if (!container) return; // No odds found
+    if (!container || !detectedOdds) return;
 
     // 2. Identify Context (Find Team Name)
     const teamName = findTeamNameFromOddsContext(container, isPoly);
 
     if (!teamName) return;
 
-    // 3. Find Opponent Odds & Show Tooltip
-    // Generate context siblings (other names in the row) to help disambiguate
+    // 3. Find Opponent Odds
     const contextSiblings = getContextSiblings(container);
     const otherList = isPoly ? stackData : polyData;
     const opponentFunc = findOpponentOdds(teamName, otherList, contextSiblings);
