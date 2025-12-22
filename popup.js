@@ -184,6 +184,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Helper to find tab by keyword
     async function findTabByKeyword(keyword) {
+        // 1. Try to find ACTIVE tab in current window first (Highest Priority)
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab && activeTab.url && activeTab.url.toLowerCase().includes(keyword.toLowerCase())) {
+            return activeTab;
+        }
+
+        // 2. Fallback to any tab
         const tabs = await chrome.tabs.query({});
         return tabs.find(t => t.url && t.url.toLowerCase().includes(keyword.toLowerCase()));
     }
@@ -221,7 +228,68 @@ document.addEventListener('DOMContentLoaded', () => {
                 target: { tabId: tab.id, allFrames: true },
                 func: () => {
                     if (window.scrapePageData) return window.scrapePageData();
-                    return null;
+
+                    // Fallback Scraper (if content script missing)
+                    console.log("Fallback Scraper Running...");
+                    const data = { type: 'unknown', odds: [] };
+
+                    // Simple Poly Scraper Logic
+                    const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+                    if (polyButtons.length > 0) {
+                        data.type = 'polymarket';
+                        polyButtons.forEach(btn => {
+                            // Extract basic info
+                            const teamNode = btn.querySelector('.opacity-70');
+                            const team = teamNode ? teamNode.textContent.trim().toUpperCase() : 'UNKNOWN';
+                            const matchCents = btn.textContent.match(/(\d+)\s*¢/);
+                            const matchDecimal = btn.textContent.match(/(\d+\.\d{2})/);
+                            let odds = null;
+
+                            if (matchCents) {
+                                const cents = parseInt(matchCents[1], 10);
+                                if (cents > 0) odds = (100 / cents).toFixed(2);
+                            } else if (matchDecimal) {
+                                odds = parseFloat(matchDecimal[1]);
+                            }
+
+                            const linkEl = btn.closest('a');
+                            const link = linkEl ? linkEl.href : window.location.href;
+
+                            if (team !== 'UNKNOWN' && odds) {
+                                data.odds.push({
+                                    team,
+                                    odds: parseFloat(odds),
+                                    source: 'Poly',
+                                    link: link,
+                                    id: btn.id
+                                });
+                            }
+                        });
+                    }
+
+                    // Simple Stake Scraper Logic
+                    if (data.odds.length === 0) {
+                        const stackItems = document.querySelectorAll('.outcome-content');
+                        if (stackItems.length > 0) {
+                            data.type = 'stack';
+                            // Add stack scraping if needed, but Poly is priority issue right now
+                            // We trust content script usually, but basic check helps
+                            stackItems.forEach(item => {
+                                const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
+                                const oddsEl = item.querySelector('[data-testid="fixture-odds"]');
+                                if (nameEl && oddsEl) {
+                                    data.odds.push({
+                                        team: nameEl.textContent.trim().toUpperCase(),
+                                        odds: parseFloat(oddsEl.textContent),
+                                        source: 'Stake',
+                                        link: window.location.href
+                                    });
+                                }
+                            });
+                        }
+                    }
+
+                    return data;
                 }
             });
 
@@ -251,11 +319,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 updateStatusTick(expectedType, true);
 
                 // Show URL in status box
-                const urlDisplayId = expectedType === 'polymarket' ? 'polyUrlDisplay' : 'stakeUrlDisplay';
-                const urlDisp = document.getElementById(urlDisplayId);
-                if (urlDisp) {
-                    urlDisp.textContent = new URL(tab.url).pathname; // Just show path for brevity
-                    urlDisp.title = tab.url; // Tooltip full url
+                const boxId = expectedType === 'polymarket' ? 'polyStatusBox' : 'stakeStatusBox';
+                const box = document.getElementById(boxId);
+
+                if (box) {
+                    let urlSpan = box.querySelector('.url-display');
+                    if (!urlSpan) {
+                        urlSpan = document.createElement('span');
+                        urlSpan.className = 'url-display';
+                        urlSpan.style.display = 'block';
+                        urlSpan.style.fontSize = '10px';
+                        urlSpan.style.color = '#7f8c8d';
+                        urlSpan.style.marginTop = '2px';
+                        box.appendChild(urlSpan);
+                    }
+                    try {
+                        const urlObj = new URL(tab.url);
+                        // Show domain + first part of path to be concise
+                        urlSpan.textContent = urlObj.hostname + (urlObj.pathname.length > 20 ? urlObj.pathname.substring(0, 20) + '...' : urlObj.pathname);
+                        urlSpan.title = tab.url;
+                    } catch (e) {
+                        urlSpan.textContent = "Invalid URL";
+                    }
                 }
 
                 // Send to background to process/store
@@ -302,17 +387,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (pTick) pTick.innerHTML = neutralIcon;
                 if (sTick) sTick.innerHTML = neutralIcon;
 
-                // Reset Status Box Color/Opacity
+                // Reset Status Box Color/Opacity & Clear URL
                 const pBox = document.getElementById('polyStatusBox');
                 const sBox = document.getElementById('stakeStatusBox');
-                if (pBox) { pBox.style.opacity = "0.5"; pBox.style.color = "#bdc3c7"; }
-                if (sBox) { sBox.style.opacity = "0.5"; sBox.style.color = "#bdc3c7"; }
 
-                // Clear URL display if we add it
-                const pUrl = document.getElementById('polyUrlDisplay');
-                const sUrl = document.getElementById('stakeUrlDisplay');
-                if (pUrl) pUrl.textContent = '';
-                if (sUrl) sUrl.textContent = '';
+                [pBox, sBox].forEach(box => {
+                    if (box) {
+                        box.style.opacity = "0.5";
+                        box.style.color = "#bdc3c7";
+                        const urlSpan = box.querySelector('.url-display');
+                        if (urlSpan) urlSpan.remove();
+                    }
+                });
 
                 updateUI();
             });
@@ -397,96 +483,71 @@ document.addEventListener('DOMContentLoaded', () => {
             if (strictMatch) {
                 return list.find(x => x.team === name);
             } else {
-                const n1 = name.toUpperCase();
+                // 0. Pre-clean
+                const clean = (s) => s.replace(/[^A-Z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
+                const n1 = clean(name.toUpperCase());
 
-                // 1. Try Simple Includes
-                let match = list.find(x => {
-                    const n2 = x.team.toUpperCase();
-                    return n1.includes(n2) || n2.includes(n1);
-                });
+                // 1. Strict Match (after cleaning)
+                let match = list.find(x => clean(x.team.toUpperCase()) === n1);
                 if (match) return match;
 
-                // 2. Normalized Strict Match (Ignore punctuation/spaces)
-                // "Gen.G" -> "GENG" vs "GENG" -> "GENG"
-                // "PR1 Paper Rex" -> "PR1PAPERREX" vs "Paper Rex" -> "PAPERREX"
-                const normalize = (s) => s.replace(/[^A-Z0-9]/g, '');
-                const norm1 = normalize(n1);
+                // If strictMatch was false, but we found a clean strict match, return it.
+                // If strictMatch was true, we would have returned earlier.
+                // So, if we reach here and strictMatch is true, it means no exact match, so return null.
+                if (strictMatch) return null;
 
-                if (norm1.length > 3) {
-                    let normMatch = list.find(x => {
-                        const norm2 = normalize(x.team.toUpperCase());
-                        return norm2.length > 3 && (norm1.includes(norm2) || norm2.includes(norm1));
-                    });
-                    if (normMatch) return normMatch;
-                }
-
-                // 3. Try Abbreviation/Token Matching (e.g. WSH vs Washington)
-                // Score all candidates
+                // 2. Fuzzy Match
                 let best = null;
                 let bestScore = 0;
 
                 list.forEach(item => {
-                    const n2 = item.team.toUpperCase();
+                    const n2 = clean(item.team.toUpperCase());
                     let score = 0;
 
-                    // A. Prefix Match (DET vs DETROIT)
-                    if (n2.startsWith(n1) || n1.startsWith(n2)) score += 50;
+                    // A. Exact Substring (High Confidence)
+                    if (n1.includes(n2) || n2.includes(n1)) {
+                        score += 60; // Immediate winner usually
+                    }
 
-                    // NEW: Handles "EPG1" vs "EPG"
-                    // If one string's first token strictly contains the other's first token
-                    const t1_first = n1.split(' ')[0];
-                    const t2_first = n2.split(' ')[0];
-                    if (t1_first.length >= 3 && t2_first.length >= 3) {
-                        if (t1_first !== t2_first && (t1_first.includes(t2_first) || t2_first.includes(t1_first))) {
+                    // B. Token Overlap (Refined)
+                    // "SNG2 Sangal" vs "Sangal Esports" -> "Sangal" is key
+                    // "NEM Team Nemesis" vs "Team Nemesis" -> "Team", "Nemesis" are keys
+                    const t1 = n1.split(' ').filter(t => t.length > 2);
+                    const t2 = n2.split(' ').filter(t => t.length > 2);
+
+                    let matchingTokens = 0;
+                    let totalRelevant = Math.min(t1.length, t2.length);
+
+                    t1.forEach(token => {
+                        if (t2.includes(token)) matchingTokens++;
+                    });
+
+                    if (matchingTokens > 0) {
+                        // Significant Match: If we match > 50% of the smaller set, or IF we match a very specific long word (>5 chars)
+                        // "Sangal" (6) matches -> Good.
+                        // "Team" (4) matches -> Okay.
+                        if (t1.some(t => t.length > 4 && t2.includes(t))) {
+                            score += 50; // Strong word match
+                        } else {
+                            score += (matchingTokens / totalRelevant) * 45;
+                        }
+                    }
+
+                    // C. Ticker Handling (Pattern: "XYZ Name")
+                    // If n1 starts with short prefix check rest
+                    const removeTicker = (s) => {
+                        const parts = s.split(' ');
+                        if (parts.length > 1 && parts[0].length <= 5) return parts.slice(1).join(' ');
+                        return s;
+                    };
+                    const n1_noTick = removeTicker(n1);
+                    const n2_noTick = removeTicker(n2);
+
+                    if (n1_noTick !== n1 || n2_noTick !== n2) {
+                        if (n1_noTick === n2_noTick || n1_noTick.includes(n2_noTick) || n2_noTick.includes(n1_noTick)) {
                             score += 45;
                         }
                     }
-
-                    // B. Subsequence Match for short tickers (e.g. WSH -> WaSHington)
-                    // Only if one is short (< 4 chars)
-                    if (n1.length <= 4 || n2.length <= 4) {
-                        const short = n1.length < n2.length ? n1 : n2;
-                        const long = n1.length < n2.length ? n2 : n1;
-
-                        let sIdx = 0;
-                        let lIdx = 0;
-                        while (sIdx < short.length && lIdx < long.length) {
-                            if (short[sIdx] === long[lIdx]) {
-                                sIdx++;
-                            }
-                            lIdx++;
-                        }
-                        // If we matched all chars of short in long
-                        if (sIdx === short.length) score += 40;
-                    }
-
-                    // C. Token Overlap (e.g. 'Hawks' in 'Atlanta Hawks')
-                    // Split by space
-                    const tokens1 = n1.split(/[\s-]+/).filter(t => t.length > 2);
-                    const tokens2 = n2.split(/[\s-]+/).filter(t => t.length > 2);
-
-                    let tokenScore = 0;
-                    // Check T1 tokens against T2
-                    tokens1.forEach(t1 => {
-                        if (tokens2.includes(t1)) {
-                            tokenScore += 40; // Exact token match (High Conf)
-                        } else if (n2.includes(t1)) {
-                            tokenScore += 10; // Substring match
-                        }
-                    });
-
-                    // Check T2 tokens against T1 (to catch reverse cases)
-                    if (tokenScore === 0) {
-                        tokens2.forEach(t2 => {
-                            if (tokens1.includes(t2)) {
-                                tokenScore += 40;
-                            } else if (n1.includes(t2)) {
-                                tokenScore += 10;
-                            }
-                        });
-                    }
-
-                    score += Math.min(tokenScore, 45); // Cap at 45 so it alone doesn't beat 50 (Prefix) purely on one token unless strong
 
                     if (score > bestScore) {
                         bestScore = score;
@@ -494,7 +555,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 });
 
-                // Threshold
                 if (bestScore >= 40) return best;
                 return null;
             }

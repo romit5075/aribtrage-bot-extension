@@ -8,11 +8,21 @@ function scrapePageData() {
     const parsePolyOdds = (str) => {
         if (!str) return null;
         if (str.toLowerCase().includes('suspended')) return 'Suspended';
-        const match = str.match(/(\d+)\s*¢/);
-        if (match) {
-            const cents = parseInt(match[1], 10);
+
+        // 1. Try Cents (e.g. 78¢)
+        const matchCents = str.match(/(\d+)\s*¢/);
+        if (matchCents) {
+            const cents = parseInt(matchCents[1], 10);
             return cents > 0 ? (100 / cents).toFixed(2) : null;
         }
+
+        // 2. Try Decimal (e.g. 1.28)
+        // Look for typical decimal odds format: digit(s) dot digit(s)
+        const matchDecimal = str.match(/(\d+\.\d{2})/);
+        if (matchDecimal) {
+            return parseFloat(matchDecimal[1]);
+        }
+
         return null;
     };
 
