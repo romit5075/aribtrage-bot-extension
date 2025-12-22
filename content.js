@@ -55,6 +55,20 @@ function scrapePageData() {
                 const txt = btn.textContent.trim();
                 const match = txt.match(/^([A-Z]{3})/);
                 if (match) team = match[1];
+
+                // Improved Name Extraction (Same as popup fallback)
+                if (team === 'UNKNOWN' || team.length <= 4) {
+                    const linkEl = btn.closest('a');
+                    if (linkEl) {
+                        const fullText = linkEl.textContent.trim().toUpperCase();
+                        const btnText = btn.textContent.trim().toUpperCase();
+                        let cleanName = fullText.replace(btnText, '').trim();
+                        cleanName = cleanName.replace(/\d+\s*¢/g, '').replace(/(\d+\.\d{2})/g, '').trim();
+                        if (cleanName.length > 3) {
+                            team = cleanName;
+                        }
+                    }
+                }
             }
 
             const clone = btn.cloneNode(true);

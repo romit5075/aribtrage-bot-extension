@@ -240,7 +240,26 @@ document.addEventListener('DOMContentLoaded', () => {
                         polyButtons.forEach(btn => {
                             // Extract basic info
                             const teamNode = btn.querySelector('.opacity-70');
-                            const team = teamNode ? teamNode.textContent.trim().toUpperCase() : 'UNKNOWN';
+                            let team = teamNode ? teamNode.textContent.trim().toUpperCase() : 'UNKNOWN';
+
+                            // Improved Name Extraction
+                            if (team === 'UNKNOWN' || team.length <= 4) {
+                                // Try to get full text from parent link or container
+                                const linkEl = btn.closest('a');
+                                if (linkEl) {
+                                    const fullText = linkEl.textContent.trim().toUpperCase();
+                                    // Remove the button text itself (e.g. "BLG 88C") to isolate name
+                                    const btnText = btn.textContent.trim().toUpperCase();
+                                    let cleanName = fullText.replace(btnText, '').trim();
+
+                                    // Clean up price junk if multiple buttons
+                                    cleanName = cleanName.replace(/\d+\s*¢/g, '').replace(/(\d+\.\d{2})/g, '').trim();
+
+                                    if (cleanName.length > 3) {
+                                        team = cleanName;
+                                    }
+                                }
+                            }
                             const matchCents = btn.textContent.match(/(\d+)\s*¢/);
                             const matchDecimal = btn.textContent.match(/(\d+\.\d{2})/);
                             let odds = null;
@@ -438,8 +457,14 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!poly && !stack) {
                 html = '<p>No data collected.</p>';
             } else {
-                if (poly) html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams</p>`;
-                if (stack) html += `<p style="font-size:10px; color:#aaa;">Stake Data: ${stack.odds.length} teams</p>`;
+                if (poly) {
+                    html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams</p>`;
+                    // console.log("Poly Data:", poly.odds.map(o => o.team)); 
+                }
+                if (stack) {
+                    html += `<p style="font-size:10px; color:#aaa;">Stake Data: ${stack.odds.length} teams</p>`;
+                    console.log("Stake Raw Data Teams:", stack.odds.map(o => o.team));
+                }
 
                 if (poly && stack) {
                     // Get strict setting
@@ -558,7 +583,28 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
 
-                    if (score > 30) {
+                    // E. Subsequence / Acronym Match (Restored for BLG -> Bilibili Gaming)
+                    if (n1.length <= 4 || n2.length <= 4) {
+                        const short = n1.length < n2.length ? n1 : n2;
+                        const long = n1.length < n2.length ? n2 : n1;
+
+                        // Strict acronym check: ensure short is at least 2 chars
+                        if (short.length >= 2) {
+                            let sIdx = 0;
+                            let lIdx = 0;
+                            while (sIdx < short.length && lIdx < long.length) {
+                                if (short[sIdx] === long[lIdx]) {
+                                    sIdx++;
+                                }
+                                lIdx++;
+                            }
+                            if (sIdx === short.length) {
+                                score += 45;
+                            }
+                        }
+                    }
+
+                    if (score > 30 || n1.includes('BILIBILI') || n1 === 'BLG' || n2 === 'BLG') {
                         console.log(`Comparing '${n1}' vs '${n2}' -> Score: ${score}`);
                     }
 
