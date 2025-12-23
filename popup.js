@@ -1,3 +1,67 @@
+// Track sent arb alerts to avoid duplicates
+const sentArbAlerts = new Set();
+
+// Helper function to send Telegram alerts for arbitrage opportunities
+function sendArbTelegramAlert(opportunity) {
+    // Create unique key to avoid duplicate alerts
+    const alertKey = `${opportunity.match}-${opportunity.polyTeam}-${opportunity.stakeTeam}-${opportunity.arbPercent}`;
+    
+    if (sentArbAlerts.has(alertKey)) {
+        console.log('[TG] Duplicate alert skipped:', alertKey);
+        return;
+    }
+    
+    sentArbAlerts.add(alertKey);
+    
+    // Clear old alerts after 5 minutes
+    setTimeout(() => sentArbAlerts.delete(alertKey), 5 * 60 * 1000);
+    
+    chrome.storage.local.get(['tgBotToken', 'tgChatId'], (res) => {
+        const token = res.tgBotToken;
+        const chatId = res.tgChatId;
+        
+        if (!token || !chatId) {
+            console.warn('[TG] Not configured');
+            return;
+        }
+        
+        const message = 
+`[ARB ALERT] *Arbitrage Opportunity!*
+
+*Match:* ${opportunity.match}
+
+*Poly:* ${opportunity.polyTeam} @ ${opportunity.polyOdds}
+*Stake:* ${opportunity.stakeTeam} @ ${opportunity.stakeOdds}
+
+*ROI:* ${opportunity.arbPercent}%
+*Stakes:* $${opportunity.stake1} / $${opportunity.stake2}
+*Profit:* $${opportunity.profit}
+
+_Time: ${new Date().toLocaleTimeString()}_`;
+        
+        const url = `https://api.telegram.org/bot${token}/sendMessage`;
+        
+        fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                chat_id: chatId,
+                text: message,
+                parse_mode: 'Markdown'
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                console.log('[TG] Arb alert sent successfully');
+            } else {
+                console.error('[TG] Failed:', data.description);
+            }
+        })
+        .catch(e => console.error('[TG] Error:', e));
+    });
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     const scanPolyBtn = document.getElementById('scanPolyBtn');
     const scanStakeBtn = document.getElementById('scanStakeBtn');
@@ -15,7 +79,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const token = res.tgBotToken;
                     const chat = res.tgChatId;
                     if (token && chat) {
-                        const msg = `🐞 *Debug Report*\n\n` +
+                        const msg = `[DEBUG] *Debug Report*\n\n` +
                             `Poly: ${data.home.team} (${data.home.odds}) vs ${data.away.team} (${data.away.odds})\n` +
                             `Stake: ${data.stakeHome.team} (${data.stakeHome.odds}) vs ${data.stakeAway.team} (${data.stakeAway.odds})`;
                         const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chat}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`;
@@ -199,7 +263,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const startBtn = document.getElementById('startMonitorBtn');
         if (startBtn) {
             startBtn.disabled = isActive;
-            startBtn.textContent = isActive ? "Live Monitoring Active" : "start Monitor (10s)";
+            startBtn.textContent = isActive ? "Real-Time Active ✓" : "start Monitor (10s)";
             startBtn.style.opacity = isActive ? "0.6" : "1";
         }
     }
@@ -215,10 +279,21 @@ document.addEventListener('DOMContentLoaded', () => {
             updateLiveUI(isLive);
             chrome.storage.local.set({ liveScanEnabled: isLive });
 
-            // Notify active tab
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (tab) {
-                chrome.tabs.sendMessage(tab.id, { action: "toggleLive", enabled: isLive });
+            // Notify ALL relevant tabs (both Stake and Polymarket)
+            const tabs = await chrome.tabs.query({});
+            for (const tab of tabs) {
+                if (tab.url && (
+                    tab.url.includes('stake.com') || 
+                    tab.url.includes('stake.us') ||
+                    tab.url.includes('polymarket.com') ||
+                    tab.url.includes('sx.bet')
+                )) {
+                    try {
+                        chrome.tabs.sendMessage(tab.id, { action: "toggleLive", enabled: isLive });
+                    } catch (err) {
+                        // Tab might not have content script loaded
+                    }
+                }
             }
         });
     }
@@ -491,18 +566,22 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateUI() {
-        chrome.storage.local.get(['polymarketData', 'stackData', 'strictMatch', 'stakeAmount'], (result) => {
+        chrome.storage.local.get(['polymarketData', 'stackData', 'strictMatch', 'stakeAmount', 'liveScanEnabled'], (result) => {
             const poly = result.polymarketData;
             const stack = result.stackData;
             const stakeAmt = result.stakeAmount || 100; // Default 100 if not set
+            const isLive = result.liveScanEnabled === true;
 
             let html = '';
 
             if (!poly && !stack) {
                 html = '<p>No data collected.</p>';
             } else {
+                const now = new Date().toLocaleTimeString();
+                const liveIndicator = isLive ? '<span style="color:#27ae60; font-weight:bold;">● LIVE</span>' : '';
+                
                 if (poly) {
-                    html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams <span style="margin-left:10px; color:#3498db;">Updated: ${new Date().toLocaleTimeString()}</span></p>`;
+                    html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams ${liveIndicator} <span style="margin-left:10px; color:#3498db;">Updated: ${now}</span></p>`;
                 }
                 if (stack) {
                     html += `<p style="font-size:10px; color:#aaa;">Stake Data: ${stack.odds.length} teams</p>`;
@@ -561,9 +640,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 // 0. Pre-clean
                 const clean = (s) => s.replace(/[^A-Z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
                 const n1 = clean(name.toUpperCase());
+                
+                // Handle "33 33" -> "33" deduplication
+                const dedupe = (s) => {
+                    const parts = s.split(' ');
+                    if (parts.length === 2 && parts[0] === parts[1]) return parts[0];
+                    return s;
+                };
+                const n1Clean = dedupe(n1);
 
                 // 1. Strict Match (after cleaning)
-                let match = list.find(x => clean(x.team.toUpperCase()) === n1);
+                let match = list.find(x => dedupe(clean(x.team.toUpperCase())) === n1Clean);
                 if (match) return match;
 
                 // If strictMatch was false, but we found a clean strict match, return it.
@@ -574,18 +661,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 let bestScore = 0;
 
                 list.forEach(item => {
-                    const n2 = clean(item.team.toUpperCase());
+                    const n2 = dedupe(clean(item.team.toUpperCase()));
                     let score = 0;
 
                     // A. Exact Substring
-                    if (n1.includes(n2) || n2.includes(n1)) score += 60;
+                    if (n1Clean.includes(n2) || n2.includes(n1Clean)) score += 60;
 
-                    // B. Prefix Match
-                    if (n1.split(' ')[0] === n2.split(' ')[0] && n1.split(' ')[0].length >= 3) score += 30;
+                    // B. Prefix Match (lowered from 3 to 2 for short names like "G1", "33")
+                    const first1 = n1Clean.split(' ')[0];
+                    const first2 = n2.split(' ')[0];
+                    if (first1 === first2 && first1.length >= 2) score += 30;
+                    
+                    // B2. Direct number match ("33" matches "33 TEAM")
+                    if (/^\d+$/.test(first1) && first1 === first2) {
+                        score += 60; // Strong match for numeric teams
+                    }
 
-                    // C. Token Overlap
-                    const uniqueTokens = (str) => [...new Set(str.split(' ').filter(t => t.length > 2))];
-                    const t1 = uniqueTokens(n1);
+                    // C. Token Overlap (lowered from > 2 to >= 2 for "G1", "33")
+                    const uniqueTokens = (str) => [...new Set(str.split(' ').filter(t => t.length >= 2))];
+                    const t1 = uniqueTokens(n1Clean);
                     const t2 = uniqueTokens(n2);
                     let matches = 0;
                     let strongMatches = 0;
@@ -595,6 +689,47 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (token.length > 3) strongMatches++;
                         }
                     });
+                    if (matches > 0) {
+                        score += (matches * 20);
+                        if (strongMatches > 0) score += 20;
+                    }
+                    
+                    // C2. Number-based team matching (e.g., "33" vs "33 TEAM")
+                    const num1 = n1Clean.match(/^\d+/)?.[0];
+                    const num2 = n2.match(/^\d+/)?.[0];
+                    if (num1 && num2 && num1 === num2) {
+                        score += 50; // Strong match for number-based teams
+                    }
+                    
+                    // C3. Core name matching (removes prefixes like "G1", "T1" and suffixes like "TEAM")
+                    const extractCore = (s) => {
+                        let core = s.replace(/^[A-Z]\d\s*/i, ''); // Remove G1, T1 prefix
+                        core = core.replace(/\s*(TEAM|ESPORTS|GAMING|CLUB)$/i, ''); // Remove suffix
+                        return core.trim();
+                    };
+                    const core1 = extractCore(n1Clean);
+                    const core2 = extractCore(n2);
+                    if (core1 && core2 && core1.length >= 3) {
+                        if (core1 === core2 || core1.includes(core2) || core2.includes(core1)) {
+                            score += 55; // Strong match for core names like "GENONE"
+                        }
+                    }
+                    
+                    // C4. Short prefix matching (e.g., "G1" matches "G1 GENONE")
+                    // If one name is a short prefix (2-3 chars) that appears at start of other
+                    const shortName = n1.length <= 3 ? n1 : (n2.length <= 3 ? n2 : null);
+                    const longName = n1.length <= 3 ? n2 : (n2.length <= 3 ? n1 : null);
+                    if (shortName && longName) {
+                        // Check if long name starts with short name (e.g., "G1 GENONE" starts with "G1")
+                        if (longName.startsWith(shortName + ' ') || longName.startsWith(shortName)) {
+                            score += 60; // Strong match
+                        }
+                        // Also check if short name appears anywhere as a token
+                        const longTokens = longName.split(' ');
+                        if (longTokens.includes(shortName)) {
+                            score += 50;
+                        }
+                    }
                     if (matches > 0) {
                         score += (matches * 20);
                         if (strongMatches > 0) score += 20;
@@ -613,6 +748,27 @@ document.addEventListener('DOMContentLoaded', () => {
                             score += 45;
                         }
                     }
+                    
+                    // D2. Direct name match after removing prefix (e.g., "GENONE" matches "G1 GENONE")
+                    // Extract the last word/main name from each
+                    const getMainName = (s) => {
+                        const parts = s.split(' ');
+                        // If first part is short (like G1, T1), return the rest
+                        if (parts.length > 1 && parts[0].length <= 2) {
+                            return parts.slice(1).join(' ');
+                        }
+                        // Return the longest part
+                        return parts.reduce((a, b) => a.length >= b.length ? a : b, '');
+                    };
+                    const main1 = getMainName(n1);
+                    const main2 = getMainName(n2);
+                    if (main1 && main2 && main1.length >= 3 && main2.length >= 3) {
+                        if (main1 === main2) {
+                            score += 70; // Very strong match for same main name
+                        } else if (main1.includes(main2) || main2.includes(main1)) {
+                            score += 55;
+                        }
+                    }
 
                     // E. Acronym
                     if (n1.length <= 4 || n2.length <= 4) {
@@ -627,6 +783,55 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (sIdx === short.length) score += 45;
                         }
                     }
+                    
+                    // F. Special case: G1/T1 style abbrevs matching full names
+                    // "G1" matches "GENONE" (G + 1/ONE)
+                    // "T1" matches "TEAMONE" etc.
+                    const abbrevMatch = (abbr, full) => {
+                        if (abbr.length !== 2) return false;
+                        const letter = abbr[0].toUpperCase();
+                        const num = abbr[1];
+                        
+                        // Check if full name starts with same letter
+                        if (full[0].toUpperCase() !== letter) return false;
+                        
+                        // Check if number part matches
+                        // 1 = ONE, 2 = TWO, 3 = THREE, etc.
+                        const numWords = { '1': 'ONE', '2': 'TWO', '3': 'THREE', '4': 'FOUR', '5': 'FIVE' };
+                        if (numWords[num] && full.toUpperCase().includes(numWords[num])) {
+                            return true;
+                        }
+                        
+                        // Also check if full name contains the number
+                        if (full.includes(num)) {
+                            return true;
+                        }
+                        
+                        return false;
+                    };
+                    
+                    if (n1Clean.length === 2 && n2.length > 3) {
+                        if (abbrevMatch(n1Clean, n2)) score += 70;
+                    } else if (n2.length === 2 && n1Clean.length > 3) {
+                        if (abbrevMatch(n2, n1Clean)) score += 70;
+                    }
+                    
+                    // G. Known abbreviation mappings
+                    const knownAbbrevs = {
+                        'G1': ['GENONE', 'GEN1', 'GEN ONE', 'G ONE'],
+                        'T1': ['TONE', 'T ONE', 'TEAM1', 'TEAMONE'],
+                        '33': ['33 TEAM', '33TEAM', 'TEAM 33', 'TEAM33', 'THIRTYTHREE'],
+                    };
+                    const checkKnownAbbrev = (short, long) => {
+                        const mappings = knownAbbrevs[short];
+                        if (mappings) {
+                            return mappings.some(m => long.includes(m) || m.includes(long));
+                        }
+                        return false;
+                    };
+                    if (checkKnownAbbrev(n1Clean, n2) || checkKnownAbbrev(n2, n1Clean)) {
+                        score += 70;
+                    }
 
                     if (score > bestScore) {
                         bestScore = score;
@@ -639,14 +844,49 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        // Iterate Poly items in pairs.
-        for (let i = 0; i < polyOdds.length - 1; i += 2) {
-            const home = polyOdds[i];
-            const away = polyOdds[i + 1];
+        // Helper to find team with its index
+        const findOddsWithIndex = (list, name) => {
+            const item = findOdds(list, name);
+            if (item) {
+                return { item, index: list.indexOf(item) };
+            }
+            return null;
+        };
 
-            // Find corresponding team in Stake.
-            const stakeHome = findOdds(stackOdds, home.team);
-            const stakeAway = findOdds(stackOdds, away.team);
+        // NEW APPROACH: Iterate STAKE items in pairs (more reliable order)
+        // Then find matching Poly teams for each Stake pair
+        for (let i = 0; i < stackOdds.length - 1; i += 2) {
+            const stakeHome = stackOdds[i];
+            const stakeAway = stackOdds[i + 1];
+            
+            // Skip if either is missing
+            if (!stakeHome || !stakeAway) continue;
+
+            // Find corresponding teams in Polymarket
+            const homeResult = findOddsWithIndex(polyOdds, stakeHome.team);
+            const awayResult = findOddsWithIndex(polyOdds, stakeAway.team);
+            
+            // Skip if we can't find both teams in Poly
+            if (!homeResult || !awayResult) continue;
+            
+            const home = homeResult.item;
+            const away = awayResult.item;
+            
+            // CRITICAL: Verify Poly teams are from the SAME match (adjacent indices)
+            // If indices are not adjacent, these are from different matches - SKIP
+            const indexDiff = Math.abs(homeResult.index - awayResult.index);
+            if (indexDiff !== 1) {
+                console.log(`[Arb] Skipping mismatch: ${home.team} (idx ${homeResult.index}) vs ${away.team} (idx ${awayResult.index}) - not adjacent`);
+                continue;
+            }
+            
+            // Check if this is a DRAW match (3-way market) - skip/gray out
+            const isDraw = (name) => {
+                const n = name.toUpperCase();
+                return n === 'DRAW' || n.includes('DRAW') || n === 'X' || n === 'TIE';
+            };
+            const isDrawMatch = isDraw(home.team) || isDraw(away.team) || 
+                               isDraw(stakeHome.team) || isDraw(stakeAway.team);
 
             if (stakeHome && stakeAway) {
                 // Determine confidence
@@ -657,6 +897,27 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Handle Suspended Checks...
                 const isSuspended = (val) => val === 'Suspended';
+                
+                // DRAW match - show grayed out
+                if (isDrawMatch) {
+                    const trunc = (str) => str.length > 4 ? str.substring(0, 4) : str;
+                    tableHtml += `
+                        <tr style="background-color: #2d2d3a; opacity: 0.5;">
+                            <td style="color: #888;">
+                                <b>${home.team}</b> vs <b>${away.team}</b>
+                                <br/><span style="font-size:9px;color:#ff9800;"><svg width="12" height="12" viewBox="0 0 24 24" fill="#ff9800" style="vertical-align:middle;margin-right:2px;"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg> 3-Way (Draw) - Skipped</span>
+                            </td>
+                            <td style="color:#666">${home.odds || '-'}</td>
+                            <td style="color:#666">${away.odds || '-'}</td>
+                            <td style="color:#666">${stakeHome?.odds || '-'}</td>
+                            <td style="color:#666">${stakeAway?.odds || '-'}</td>
+                            <td colspan="2" style="color:#666">-</td>
+                            <td style="text-align: left;">
+                                <span style="color:#888; font-size:10px;">Skipped (Draw)</span>
+                            </td>
+                        </tr>`;
+                    continue; // Skip to next match
+                }
 
                 if (isSuspended(home.odds) || isSuspended(away.odds) ||
                     isSuspended(stakeHome.odds) || isSuspended(stakeAway.odds)) {
@@ -702,6 +963,21 @@ document.addEventListener('DOMContentLoaded', () => {
                             s1_away_val = split.stake2;
                             s1_home_disp = `<span class="stake-display">$${split.stake1}</span>`;
                             s1_away_disp = `<span class="stake-display">$${split.stake2}</span>`;
+                            
+                            // Send Telegram alert for Arb 1
+                            sendArbTelegramAlert({
+                                match: `${home.team} vs ${away.team}`,
+                                polyTeam: home.team,
+                                polyOdds: home.odds,
+                                stakeTeam: stakeAway.team,
+                                stakeOdds: stakeAway.odds,
+                                arbPercent: arb1.roi,
+                                stake1: split.stake1,
+                                stake2: split.stake2,
+                                profit: split.profit,
+                                polyLink: home.link,
+                                stakeLink: stakeAway.link
+                            });
                         }
                     }
 
@@ -712,6 +988,21 @@ document.addEventListener('DOMContentLoaded', () => {
                             s2_away_val = split.stake2;
                             s2_home_disp = `<span class="stake-display">$${split.stake1}</span>`;
                             s2_away_disp = `<span class="stake-display">$${split.stake2}</span>`;
+                            
+                            // Send Telegram alert for Arb 2
+                            sendArbTelegramAlert({
+                                match: `${home.team} vs ${away.team}`,
+                                polyTeam: away.team,
+                                polyOdds: away.odds,
+                                stakeTeam: stakeHome.team,
+                                stakeOdds: stakeHome.odds,
+                                arbPercent: arb2.roi,
+                                stake1: split.stake1,
+                                stake2: split.stake2,
+                                profit: split.profit,
+                                polyLink: away.link,
+                                stakeLink: stakeHome.link
+                            });
                         }
                     }
 

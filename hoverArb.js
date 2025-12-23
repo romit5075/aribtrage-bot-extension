@@ -352,13 +352,13 @@ function showTooltip(element, currentOdds, requiredOdds, event) {
     let statusColor, statusText;
     if (requiredOdds <= 1.5) {
         statusColor = '#4CAF50'; // Green - very favorable
-        statusText = '🟢 Easy';
+        statusText = '[OK] Easy';
     } else if (requiredOdds <= 2.0) {
         statusColor = '#8BC34A'; // Light green - good
-        statusText = '🟢 Good';
+        statusText = '[OK] Good';
     } else if (requiredOdds <= 3.0) {
         statusColor = '#FFC107'; // Yellow - moderate
-        statusText = '🟡 Moderate';
+        statusText = '[!] Moderate';
     } else {
         statusColor = '#FF9800'; // Orange - harder
         statusText = '🟠 Harder';

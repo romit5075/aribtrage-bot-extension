@@ -1,6 +1,14 @@
 // Expose to window
 window.scrapePageData = scrapePageData;
 
+// Debug function to see what's being scraped
+window.debugScrape = function() {
+    const data = scrapePageData();
+    console.log('[DEBUG] Scraped Data:', JSON.stringify(data, null, 2));
+    console.log('[DEBUG] Teams found:', data.odds.map(o => `${o.team} @ ${o.odds}`).join(', '));
+    return data;
+};
+
 // --- ROBUST SCRAPER (Ported from Background) ---
 function scrapePageData() {
     const data = { type: 'unknown', odds: [] };
@@ -16,11 +24,25 @@ function scrapePageData() {
             return cents > 0 ? (100 / cents).toFixed(2) : null;
         }
 
-        // 2. Try Decimal (e.g. 1.28)
-        // Look for typical decimal odds format: digit(s) dot digit(s)
-        const matchDecimal = str.match(/(\d+\.\d{2})/);
+        // 2. Try Decimal (e.g. 1.28, 1.85)
+        // If it's already a decimal odds value (typically 1.01 to 100.00)
+        const matchDecimal = str.match(/(\d+\.\d+)/);
         if (matchDecimal) {
-            return parseFloat(matchDecimal[1]);
+            const val = parseFloat(matchDecimal[1]);
+            // If value looks like decimal odds (1.01 to 100), return as-is
+            // If it looks like cents converted wrongly (0.xx), convert
+            if (val >= 1.01 && val <= 100) {
+                return val;
+            }
+        }
+
+        // 3. Try plain integer as cents (e.g., "52" means 52 cents)
+        const matchInt = str.match(/^(\d+)$/);
+        if (matchInt) {
+            const cents = parseInt(matchInt[1], 10);
+            if (cents > 0 && cents <= 100) {
+                return (100 / cents).toFixed(2);
+            }
         }
 
         return null;
@@ -43,90 +65,218 @@ function scrapePageData() {
     };
 
     // 1. Polymarket Scraper
-    const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
-    if (polyButtons.length > 0) {
+    // Group by match/event container first
+    const polyMarketContainers = document.querySelectorAll('a[href*="/event/"]');
+    if (polyMarketContainers.length > 0) {
         data.type = 'polymarket';
-        polyButtons.forEach(btn => {
-            let team = 'UNKNOWN';
-            const teamNode = btn.querySelector('.opacity-70');
-            if (teamNode) {
-                team = teamNode.textContent.trim().toUpperCase();
-            } else {
-                const txt = btn.textContent.trim();
-                const match = txt.match(/^([A-Z]{3})/);
-                if (match) team = match[1];
-
-                // Improved Name Extraction (Same as popup fallback)
-                // Fix for "33 33" -> "33"
-                if (team === 'UNKNOWN' || team.length <= 4) {
-                    const linkEl = btn.closest('a');
-                    if (linkEl) {
-                        const fullText = linkEl.textContent.trim().toUpperCase();
-                        let btnText = btn.textContent.trim().toUpperCase();
-
-                        // If btnText is "33 79¢ 1.27", we only want to remove odds
-                        // Clean fullText: "33 33" -> we want "33"
-                        // Or if page says "33 33", it's the name twice?
-
-                        let cleanName = fullText.replace(btnText, '').trim();
-                        // Remove odds if leaked
-                        cleanName = cleanName.replace(/\d+\s*¢/g, '').replace(/(\d+\.\d{2})/g, '').trim();
-
-                        // Special case for repeated numeric names "33 33"
-                        const tokens = cleanName.split(' ');
-                        if (tokens.length === 2 && tokens[0] === tokens[1]) {
-                            cleanName = tokens[0];
-                        }
-
-                        if (cleanName.length >= 1) { // Allow short names like "33"
-                            team = cleanName;
+        
+        polyMarketContainers.forEach(container => {
+            const buttons = container.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+            const matchTeams = [];
+            
+            buttons.forEach(btn => {
+                let team = 'UNKNOWN';
+                
+                // Get team name ONLY from .opacity-70 - this is ALWAYS the team name
+                const teamNode = btn.querySelector('.opacity-70');
+                if (teamNode) {
+                    let rawTeam = teamNode.textContent.trim().toUpperCase();
+                    
+                    // Aggressive cleaning for team names:
+                    // 1. Remove any decimal numbers (odds that leaked in)
+                    rawTeam = rawTeam.replace(/\d+\.\d+/g, '').trim();
+                    // 2. Remove cents pattern
+                    rawTeam = rawTeam.replace(/\d+¢/g, '').trim();
+                    // 3. Remove standalone numbers at end that look like odds (1-999)
+                    rawTeam = rawTeam.replace(/\s+\d{1,3}$/g, '').trim();
+                    // 4. If starts with number and has more digits after space, only keep first part
+                    // e.g., "33 208" -> "33"
+                    if (/^\d+/.test(rawTeam)) {
+                        const numParts = rawTeam.split(/\s+/);
+                        if (numParts.length >= 2 && /^\d+$/.test(numParts[0]) && /^\d+$/.test(numParts[1])) {
+                            rawTeam = numParts[0]; // Only keep first number
                         }
                     }
+                    // 5. If team name has same token twice, dedupe
+                    // e.g., "33 33" -> "33", "GENONE GENONE" -> "GENONE"
+                    const parts = rawTeam.split(/\s+/);
+                    if (parts.length === 2 && parts[0] === parts[1]) {
+                        rawTeam = parts[0];
+                    }
+                    
+                    team = rawTeam;
                 }
-            }
-
-            const clone = btn.cloneNode(true);
-            const tags = clone.querySelectorAll('.odds-converted-tag');
-            tags.forEach(t => t.remove());
-            const teamEl = clone.querySelector('.opacity-70');
-            if (teamEl) teamEl.remove();
-
-            const rawText = clone.textContent.trim();
-            const odds = parsePolyOdds(rawText);
-
-            // Get Link
-            const linkEl = btn.closest('a');
-            const link = linkEl ? linkEl.href : window.location.href;
-
-            if (team !== 'UNKNOWN' && odds) {
-                data.odds.push({
-                    team,
-                    odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
-                    source: 'Poly',
-                    link: link,
-                    id: btn.id // Capture ID
-                });
-            }
+                
+                // Get odds - try multiple approaches
+                let odds = null;
+                
+                // Method 1: Direct odds span with .ml-1 class (new Polymarket format)
+                const oddsSpan = btn.querySelector('.ml-1, [class*="ml-1"]');
+                if (oddsSpan) {
+                    const oddsText = oddsSpan.textContent.trim();
+                    odds = parsePolyOdds(oddsText);
+                }
+                
+                // Method 2: Fallback - clone and remove team element
+                if (!odds) {
+                    const clone = btn.cloneNode(true);
+                    const tags = clone.querySelectorAll('.odds-converted-tag');
+                    tags.forEach(t => t.remove());
+                    const teamEl = clone.querySelector('.opacity-70');
+                    if (teamEl) teamEl.remove();
+                    
+                    const rawText = clone.textContent.trim();
+                    odds = parsePolyOdds(rawText);
+                }
+                
+                if (team && team !== 'UNKNOWN' && team.length > 0 && odds) {
+                    matchTeams.push({
+                        team,
+                        odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
+                        source: 'Poly',
+                        link: container.href || window.location.href,
+                        id: btn.id
+                    });
+                }
+            });
+            
+            // Add teams from this match to data
+            // This keeps teams from the same match together
+            matchTeams.forEach(t => data.odds.push(t));
         });
+    }
+    
+    // Fallback: Original button-based scraper if no containers found
+    if (data.odds.length === 0) {
+        const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+        if (polyButtons.length > 0) {
+            data.type = 'polymarket';
+            polyButtons.forEach(btn => {
+                let team = 'UNKNOWN';
+                
+                // Get team name from .opacity-70
+                const teamNode = btn.querySelector('.opacity-70');
+                if (teamNode) {
+                    let rawTeam = teamNode.textContent.trim().toUpperCase();
+                    
+                    // Aggressive cleaning for team names:
+                    rawTeam = rawTeam.replace(/\d+\.\d+/g, '').trim();
+                    rawTeam = rawTeam.replace(/\d+¢/g, '').trim();
+                    rawTeam = rawTeam.replace(/\s+\d{1,3}$/g, '').trim();
+                    if (/^\d+/.test(rawTeam)) {
+                        const numParts = rawTeam.split(/\s+/);
+                        if (numParts.length >= 2 && /^\d+$/.test(numParts[0]) && /^\d+$/.test(numParts[1])) {
+                            rawTeam = numParts[0];
+                        }
+                    }
+                    const parts = rawTeam.split(/\s+/);
+                    if (parts.length === 2 && parts[0] === parts[1]) {
+                        rawTeam = parts[0];
+                    }
+                    
+                    team = rawTeam;
+                }
+                
+                // Get odds - try multiple approaches
+                let odds = null;
+                
+                // Method 1: Direct odds span with .ml-1 class
+                const oddsSpan = btn.querySelector('.ml-1, [class*="ml-1"]');
+                if (oddsSpan) {
+                    const oddsText = oddsSpan.textContent.trim();
+                    odds = parsePolyOdds(oddsText);
+                }
+                
+                // Method 2: Fallback - clone and remove team element
+                if (!odds) {
+                    const clone = btn.cloneNode(true);
+                    const tags = clone.querySelectorAll('.odds-converted-tag');
+                    tags.forEach(t => t.remove());
+                    const teamEl = clone.querySelector('.opacity-70');
+                    if (teamEl) teamEl.remove();
+                    
+                    const rawText = clone.textContent.trim();
+                    odds = parsePolyOdds(rawText);
+                }
+
+                const linkEl = btn.closest('a');
+                const link = linkEl ? linkEl.href : window.location.href;
+
+                if (team !== 'UNKNOWN' && odds) {
+                    data.odds.push({
+                        team,
+                        odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
+                        source: 'Poly',
+                        link: link,
+                        id: btn.id
+                    });
+                }
+            });
+        }
     }
 
     // 2. Stake/SX Scraper
     if (data.odds.length === 0) {
-        const stackItems = document.querySelectorAll('.outcome-content');
+        // Try multiple selector strategies for Stake
+        let stackItems = document.querySelectorAll('.outcome-content');
+        
+        // Alternative selectors if main one doesn't find items
+        if (stackItems.length === 0) {
+            stackItems = document.querySelectorAll('[data-testid="outcome-button"]');
+        }
+        if (stackItems.length === 0) {
+            stackItems = document.querySelectorAll('.outcome-button');
+        }
+        
         if (stackItems.length > 0) {
             data.type = 'stack';
             stackItems.forEach(item => {
-                const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
-                const oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
-
-                const team = nameEl ? nameEl.textContent.trim().toUpperCase() : 'UNKNOWN';
+                // Try multiple ways to get team name
+                let nameEl = item.querySelector('[data-testid="outcome-button-name"]');
+                if (!nameEl) {
+                    nameEl = item.querySelector('.outcome-name, .team-name, [class*="name"]');
+                }
+                
+                // Also check the button text directly
+                let team = 'UNKNOWN';
+                if (nameEl) {
+                    team = nameEl.textContent.trim().toUpperCase();
+                } else {
+                    // Try to get name from the item itself
+                    const btn = item.closest('button') || item;
+                    const allText = btn.innerText || btn.textContent;
+                    const lines = allText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                    
+                    // First non-numeric line is likely the team name
+                    for (const line of lines) {
+                        // Skip if it looks like odds
+                        if (/^\d+\.\d+$/.test(line)) continue;
+                        if (line.length >= 2 && line.length <= 30) {
+                            team = line.toUpperCase();
+                            break;
+                        }
+                    }
+                }
+                
+                // Get odds
+                let oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
+                if (!oddsContainer) {
+                    oddsContainer = item.querySelector('.odds, [class*="odds"]');
+                }
+                
                 let odds = null;
-
                 if (oddsContainer) {
                     odds = parseStakeOdds(oddsContainer.textContent);
                 } else {
-                    const btn = item.closest('button');
-                    if (btn && btn.disabled) odds = 'Suspended';
+                    // Try to find odds in the button
+                    const btn = item.closest('button') || item;
+                    const text = btn.textContent;
+                    const oddsMatch = text.match(/(\d+\.\d{2})/);
+                    if (oddsMatch) {
+                        odds = parseFloat(oddsMatch[1]);
+                    } else {
+                        if (btn.disabled) odds = 'Suspended';
+                    }
                 }
 
                 // Time Extraction
@@ -174,53 +324,150 @@ function scrapePageData() {
     return data;
 }
 
-// --- Live Monitoring (Ultra Low Latency) ---
+// --- Live Monitoring (Ultra Low Latency with Smart Change Detection) ---
 let liveObserver = null;
 let liveRafId = null;
 let isScanPending = false;
+let lastOddsSnapshot = null; // Cache to detect actual changes
+let liveDebounceTimer = null;
+
+// Helper to create a snapshot of current odds for comparison
+function createOddsSnapshot(data) {
+    if (!data || !data.odds) return '';
+    return data.odds.map(o => `${o.team}:${o.odds}`).sort().join('|');
+}
 
 function startLiveMonitoring() {
     stopLiveMonitoring(); // reset
-    console.log("Starting Real-Time Monitoring (rAF)...");
+    console.log("Starting Real-Time Monitoring (Targeted Observer)...");
 
-    const pushUpdate = () => {
+    const pushUpdate = (force = false) => {
         isScanPending = false;
         const data = scrapePageData();
+        
         if (data.odds.length > 0) {
-            try {
-                chrome.runtime.sendMessage({ action: "live_data_update", data: data }, (response) => {
-                    if (chrome.runtime.lastError) { }
-                });
-            } catch (err) {
-                stopLiveMonitoring();
+            const newSnapshot = createOddsSnapshot(data);
+            
+            // Only send update if odds actually changed OR force update
+            if (force || newSnapshot !== lastOddsSnapshot) {
+                lastOddsSnapshot = newSnapshot;
+                console.log("[Live] Odds changed, pushing update:", data.odds.length, "items");
+                try {
+                    chrome.runtime.sendMessage({ action: "live_data_update", data: data }, (response) => {
+                        if (chrome.runtime.lastError) { }
+                    });
+                } catch (err) {
+                    stopLiveMonitoring();
+                }
             }
         }
     };
 
-    // Initial Push
-    pushUpdate();
+    // Initial Push (force)
+    pushUpdate(true);
 
-    // 1. Mutation Observer triggers a frame request
+    // Debounced update function - much faster than rAF
+    const scheduleUpdate = () => {
+        if (liveDebounceTimer) {
+            clearTimeout(liveDebounceTimer);
+        }
+        // 50ms debounce - fast enough to feel instant, slow enough to batch rapid changes
+        liveDebounceTimer = setTimeout(() => {
+            pushUpdate(false);
+        }, 50);
+    };
+
+    // Create targeted observers for specific odds containers
     liveObserver = new MutationObserver((mutations) => {
-        // Log mutation types to debug what we are seeing
-        // const types = mutations.map(m => m.type);
-        // console.log("Mutations:", types);
-
-        if (!isScanPending) {
-            isScanPending = true;
-            liveRafId = requestAnimationFrame(pushUpdate);
+        let hasRelevantChange = false;
+        
+        for (const mutation of mutations) {
+            // Check if mutation is relevant to odds display
+            const target = mutation.target;
+            
+            // Check for Stake odds changes
+            if (target.matches && (
+                target.matches('[data-testid="fixture-odds"]') ||
+                target.matches('[data-testid="outcome-button-name"]') ||
+                target.closest('[data-testid="fixture-odds"]') ||
+                target.closest('.outcome-content')
+            )) {
+                hasRelevantChange = true;
+                break;
+            }
+            
+            // Check for Polymarket odds changes
+            if (target.matches && (
+                target.matches('.trading-button') ||
+                target.matches('button[class*="trading-button"]') ||
+                target.closest('.trading-button') ||
+                target.closest('button[class*="trading-button"]')
+            )) {
+                hasRelevantChange = true;
+                break;
+            }
+            
+            // Check text content changes for odds patterns
+            if (mutation.type === 'characterData') {
+                const text = target.textContent || '';
+                // Check if text contains odds-like patterns
+                if (/\d+\s*¢/.test(text) || /^\d+\.\d{2}$/.test(text.trim())) {
+                    hasRelevantChange = true;
+                    break;
+                }
+            }
+            
+            // Check added nodes for odds elements
+            if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType === Node.ELEMENT_NODE) {
+                        if (node.querySelector && (
+                            node.querySelector('[data-testid="fixture-odds"]') ||
+                            node.querySelector('.outcome-content') ||
+                            node.querySelector('.trading-button') ||
+                            node.matches('[data-testid="fixture-odds"]') ||
+                            node.matches('.outcome-content')
+                        )) {
+                            hasRelevantChange = true;
+                            break;
+                        }
+                    }
+                    // Text node with odds
+                    if (node.nodeType === Node.TEXT_NODE) {
+                        const text = node.textContent || '';
+                        if (/\d+\s*¢/.test(text) || /^\d+\.\d{2}$/.test(text.trim())) {
+                            hasRelevantChange = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (hasRelevantChange) break;
+        }
+        
+        if (hasRelevantChange) {
+            scheduleUpdate();
         }
     });
 
-    // Observe everything, including characterData for text updates
-    // IMPORTANT: subtree: true is required to see deep changes
+    // Observe with optimized settings
     liveObserver.observe(document.body, {
         childList: true,
         subtree: true,
         attributes: true,
+        attributeFilter: ['class', 'data-testid', 'disabled'], // Only watch relevant attributes
         characterData: true,
         characterDataOldValue: false
     });
+    
+    // Also set up a polling fallback for sites that update via Canvas/WebGL or complex frameworks
+    // This runs every 2 seconds as a safety net, but only sends if data actually changed
+    setInterval(() => {
+        if (!isScanPending) {
+            pushUpdate(false);
+        }
+    }, 2000);
 }
 
 function stopLiveMonitoring() {
@@ -232,7 +479,12 @@ function stopLiveMonitoring() {
         cancelAnimationFrame(liveRafId);
         liveRafId = null;
     }
+    if (liveDebounceTimer) {
+        clearTimeout(liveDebounceTimer);
+        liveDebounceTimer = null;
+    }
     isScanPending = false;
+    lastOddsSnapshot = null;
 }
 
 // Handler
@@ -454,6 +706,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     input.dispatchEvent(new Event('input', { bubbles: true }));
 
                     setTimeout(() => {
+                        // Check for minimum bet warning
+                        checkMinBetWarning(targetTeam, amount, expectedOdds);
+                        
                         placeBtn.style.border = "4px solid #e91e63"; // Highlight "Place Bet"
                         // Send success message
                         chrome.runtime.sendMessage({ action: "bet_placed_success", team: targetTeam, amount: amount, odds: expectedOdds });
@@ -461,6 +716,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 } else setTimeout(() => attempt(n + 1), 250);
             };
             attempt(0);
+        };
+        
+        // Function to check for minimum bet warning on Stake
+        const checkMinBetWarning = (team, amount, odds) => {
+            setTimeout(() => {
+                // Look for the warning message
+                const warningEl = document.querySelector('.system-message.info, [class*="system-message"]');
+                const pageText = document.body.innerText;
+                
+                if (warningEl || pageText.includes('Minimum bet amount')) {
+                    // Extract minimum amount if possible
+                    const minMatch = pageText.match(/Minimum bet amount is[^\d]*([\d.,]+)/i);
+                    const minAmount = minMatch ? minMatch[1] : 'unknown';
+                    
+                    const message = `[WARNING] *Stake Minimum Bet Warning*\n\n` +
+                        `Team: ${team}\n` +
+                        `Entered: ${amount}\n` +
+                        `Minimum Required: ₹${minAmount}\n` +
+                        `Odds: ${odds}`;
+                    
+                    // Send to background to forward to TG
+                    chrome.runtime.sendMessage({ 
+                        action: "stake_min_bet_warning", 
+                        team: team,
+                        enteredAmount: amount,
+                        minAmount: minAmount,
+                        odds: odds,
+                        message: message
+                    });
+                    
+                    // Show alert popup
+                    alert(`[WARNING] Stake Minimum Bet Warning!\n\nMinimum bet is ₹${minAmount}\nYou entered: ${amount}`);
+                }
+            }, 800); // Wait for warning to appear
         };
 
         checkAndClick(0);
@@ -471,12 +760,18 @@ let isEnabled = true;
 let observer = null;
 
 // Initialize
-chrome.storage.local.get(['isEnabled'], (result) => {
+chrome.storage.local.get(['isEnabled', 'liveScanEnabled'], (result) => {
     isEnabled = result.isEnabled !== false; // Default true
     if (isEnabled) {
         runConverter();
         setTimeout(runConverter, 1000);
         startObserver();
+    }
+    
+    // Auto-start live monitoring if enabled in settings
+    if (result.liveScanEnabled === true) {
+        console.log("[Content] Auto-starting live monitoring from saved setting");
+        startLiveMonitoring();
     }
 });
 

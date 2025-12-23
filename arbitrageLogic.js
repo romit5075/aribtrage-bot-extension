@@ -67,37 +67,86 @@ class ArbitrageCalculator {
 
         // Helper to find team in list
         const normalize = (str) => str.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+        
+        // Extract core name by removing common prefixes/suffixes
+        const extractCoreName = (str) => {
+            let s = str.toUpperCase();
+            // Remove common prefixes like "G1", "T1", etc.
+            s = s.replace(/^[A-Z]\d\s*/i, '');
+            // Remove common suffixes
+            s = s.replace(/\s*(TEAM|ESPORTS|GAMING|CLUB|PRO|CLAN|ESPORT)$/i, '');
+            return s.trim();
+        };
+        
+        // Check if two team names likely refer to the same team
+        const teamsMatch = (name1, name2) => {
+            const n1 = normalize(name1);
+            const n2 = normalize(name2);
+            
+            // 1. Direct normalized match
+            if (n1 === n2) return true;
+            if (n1.includes(n2) || n2.includes(n1)) return true;
+            
+            // 2. Core name extraction (handles "GenOne" vs "G1 GenOne")
+            const core1 = normalize(extractCoreName(name1));
+            const core2 = normalize(extractCoreName(name2));
+            if (core1 && core2 && (core1.includes(core2) || core2.includes(core1))) return true;
+            
+            // 3. Handle number-based names like "33 Team" vs "33 33"
+            // Extract leading numbers
+            const num1 = name1.match(/^\d+/)?.[0];
+            const num2 = name2.match(/^\d+/)?.[0];
+            if (num1 && num2 && num1 === num2) {
+                // Both start with same number - likely same team
+                return true;
+            }
+            
+            // 4. Token overlap with minimum length 2 (to catch "33")
+            const tokens1 = name1.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 2);
+            const tokens2 = name2.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length >= 2);
+            
+            const commons = ['TEAM', 'ESPORTS', 'GAMING', 'CLUB', 'PRO', 'CLAN', 'ESPORT', 'ORG'];
+            const intersection = tokens1.filter(t => tokens2.includes(t));
+            
+            if (intersection.length > 0) {
+                const meaningful = intersection.filter(t => !commons.includes(t));
+                // If any meaningful token matches, or if it's a number token
+                if (meaningful.length > 0) return true;
+            }
+            
+            // 5. G1/T1 style abbreviation matching (G1 = GenOne, T1 = TeamOne)
+            const abbrevMatch = (abbr, full) => {
+                const a = abbr.toUpperCase();
+                const f = full.toUpperCase();
+                if (a.length !== 2) return false;
+                const letter = a[0];
+                const num = a[1];
+                
+                // Check if full name starts with same letter
+                if (f[0] !== letter) return false;
+                
+                // Check if number part matches (1=ONE, 2=TWO, etc.)
+                const numWords = { '1': 'ONE', '2': 'TWO', '3': 'THREE', '4': 'FOUR', '5': 'FIVE' };
+                if (numWords[num] && f.includes(numWords[num])) return true;
+                if (f.includes(num)) return true;
+                
+                return false;
+            };
+            
+            if (name1.length === 2 && name2.length > 3) {
+                if (abbrevMatch(name1, name2)) return true;
+            } else if (name2.length === 2 && name1.length > 3) {
+                if (abbrevMatch(name2, name1)) return true;
+            }
+            
+            return false;
+        };
 
         const findOdds = (list, name) => {
             if (strictMatch) {
                 return list.find(x => x.team === name);
             } else {
-                return list.find(x => {
-                    // 1. Direct "Clean" Match
-                    const n1 = normalize(name);
-                    const n2 = normalize(x.team);
-
-                    if (n1.includes(n2) || n2.includes(n1)) return true;
-
-                    // 2. Token overlap (for cases like "Team A" vs "Organization Team A")
-                    // This handles cases where one string has extra words not in the other
-                    const tokens1 = name.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
-                    const tokens2 = x.team.toUpperCase().split(/[^A-Z0-9]+/).filter(t => t.length > 2);
-
-                    // If any significant token matches exactly? 
-                    // Or if intersection is substantial?
-                    const intersection = tokens1.filter(t => tokens2.includes(t));
-
-                    // If more than 50% of tokens match, or at least 1 unique distinct token matching
-                    // Avoid matching common words like "TEAM", "ESPORTS", "GAMING" unless that's the only word
-                    const commons = ['TEAM', 'ESPORTS', 'GAMING', 'CLUB', 'PRO', 'CLAN'];
-                    if (intersection.length > 0) {
-                        const meaningful = intersection.filter(t => !commons.includes(t));
-                        if (meaningful.length > 0) return true;
-                    }
-
-                    return false;
-                });
+                return list.find(x => teamsMatch(name, x.team));
             }
         };
 

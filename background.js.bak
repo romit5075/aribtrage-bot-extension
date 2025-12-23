@@ -1,5 +1,4 @@
 importScripts('arbitrageLogic.js');
-importScripts('telegram.js');
 
 // 1. Listen for Messages
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -95,9 +94,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Helper to trigger click with retry
         const triggerClick = (tabId, retries = 3) => {
-            const amount = request.amount;
-            const expectedOdds = request.expectedOdds;
-            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id, amount: amount, expectedOdds: expectedOdds }, (response) => {
+            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id }, (response) => {
                 const err = chrome.runtime.lastError;
                 if (err) {
                     // Ignore "port closed" error as it usually means listener existed but closed (success-ish)
@@ -133,33 +130,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     };
                     chrome.tabs.onUpdated.addListener(listener);
                 });
-            }
-        });
-        return true;
-    }
-    
-    // Handle Stake Minimum Bet Warning - Send TG notification
-    if (request.action === "stake_min_bet_warning") {
-        chrome.storage.local.get(['tgBotToken', 'tgChatId'], (res) => {
-            const token = res.tgBotToken;
-            const chatId = res.tgChatId;
-            
-            if (token && chatId) {
-                const message = request.message || 
-                    `[WARNING] *Stake Minimum Bet Warning*\n\n` +
-                    `Team: ${request.team}\n` +
-                    `Entered: ${request.enteredAmount}\n` +
-                    `Minimum Required: ₹${request.minAmount}\n` +
-                    `Odds: ${request.odds}`;
-                
-                const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(message)}&parse_mode=Markdown`;
-                
-                fetch(url)
-                    .then(r => r.json())
-                    .then(data => {
-                        console.log("[TG] Min bet warning sent:", data.ok);
-                    })
-                    .catch(e => console.error("[TG] Failed to send min bet warning:", e));
             }
         });
         return true;
@@ -581,75 +551,3 @@ function handleNewData(newData) {
         }
     });
 }
-
-
-// 7. Force Trade Handler (Manual "Auto Bet")
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === "force_trade") {
-        const { op } = request;
-        if (!op) return;
-
-        chrome.storage.local.get(['tgBotToken', 'tgChatId', 'maxPayroll', 'stakeAmount', 'blockedFunds', 'tradeCount', 'maxTrades'], (result) => {
-            const botToken = result.tgBotToken;
-            const chatId = result.tgChatId;
-            const stake = result.stakeAmount || 100;
-            const maxPay = result.maxPayroll || 1000;
-            let blocked = result.blockedFunds || 0;
-            let tradeCount = result.tradeCount || 0;
-
-            blocked += stake;
-            tradeCount += 1;
-
-            const calc = ArbitrageCalculator.calculateStakes(stake, op.odds[0], op.odds[1]);
-
-            // Log
-            const tradeLog = {
-                ...op,
-                tradeTaken: true,
-                invested: stake,
-                expectedReturn: calc ? calc.totalReturn : 0,
-                timestamp: new Date().toISOString(),
-                manual: true
-            };
-            ArbitrageLogger.logPositive(tradeLog);
-            chrome.storage.local.set({ blockedFunds: blocked, tradeCount: tradeCount });
-
-            // Send TG
-            if (botToken && chatId) {
-                const cleanMatch = op.match.replace(/\*/g, '');
-                const cleanBet = op.betOn.replace(/\*/g, '');
-
-                const msg = `MANUAL BET TAKEN\n\n` +
-                    `Match: ${cleanMatch}\n` +
-                    `Bet: ${cleanBet}\n` +
-                    `Odds: ${op.odds.join(' vs ')}\n` +
-                    `\nInvested: $${stake} | Return: $${calc ? calc.totalReturn : '0'}\n` +
-                    `Total Profit: $${calc ? calc.profit : '0'} (ROI: ${calc ? calc.roi : '0'}%)\n` +
-                    `\nBlocked Funds: $${blocked} / $${maxPay}\n` +
-                    `Trades Session: ${tradeCount}`;
-
-                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}`;
-                fetch(url).catch(e => console.error("TG Send Fail", e));
-            }
-
-            sendResponse({ success: true, blocked: blocked });
-        });
-        return true; // async
-    }
-
-    if (request.action === "bet_placed_success") {
-        chrome.storage.local.get(['tgBotToken', 'tgChatId'], (result) => {
-            const botToken = result.tgBotToken;
-            const chatId = result.tgChatId;
-            if (botToken && chatId) {
-                const msg = `[SUCCESS] BET SLIP FILLED (Auto)\n\n` +
-                    `Team: ${request.team}\n` +
-                    `Odds Verified: ${request.odds}\n` +
-                    `Amount: ${request.amount || '0.01'}\n` +
-                    `\nPlease confirm manually!`;
-                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}`;
-                fetch(url).catch(e => console.error("TG Send Fail", e));
-            }
-        });
-    }
-});
