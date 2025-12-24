@@ -94,46 +94,247 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const { url, team, id } = request;
 
         // Helper to trigger click with retry
-        const triggerClick = (tabId, retries = 3) => {
-            const amount = request.amount;
-            const expectedOdds = request.expectedOdds;
-            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id, amount: amount, expectedOdds: expectedOdds }, (response) => {
-                const err = chrome.runtime.lastError;
-                if (err) {
-                    // Ignore "port closed" error as it usually means listener existed but closed (success-ish)
-                    // But if we want to be strict, we only retry on meaningful connection errors
-                    console.log("Msg error:", err.message);
+        const triggerClick = (tabId, retries = 3, finalAmount) => {
+            const targetTeam = team;
+            const targetId = id;
 
-                    if (retries > 0 && !err.message.includes("closed before a response")) {
-                        console.log("Retrying click in 500ms...");
-                        setTimeout(() => triggerClick(tabId, retries - 1), 500);
+            chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                func: (teamName, btnId, stakeAmt) => {
+                    console.log(`[Auto-Bet] Starting execution for ${teamName} ($${stakeAmt})`);
+
+                    // 1. Helper: Robust Input Filler (Simulate Typing)
+                    const simulateUserTyping = (element, value) => {
+                        element.focus();
+                        element.select();
+                        if (!document.execCommand('insertText', false, value)) {
+                            // Fallback to React setter if execCommand fails
+                            const valueSetter = Object.getOwnPropertyDescriptor(element, 'value').set;
+                            const prototype = Object.getPrototypeOf(element);
+                            const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
+
+                            if (valueSetter && valueSetter !== prototypeValueSetter) {
+                                prototypeValueSetter.call(element, value);
+                            } else {
+                                valueSetter.call(element, value);
+                            }
+                            element.dispatchEvent(new Event('input', { bubbles: true }));
+                            element.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    };
+
+                    // 2. Logic: Process Bet Slip (Poll for Input -> Fill -> Poll for Place Bet -> Click)
+                    const processBetSlip = (retries = 50) => { // 5s timeout
+                        // A. Find Input
+                        let input = document.getElementById('market-order-amount-input');
+                        if (!input) input = document.querySelector('input[data-testid="input-bet-amount"]');
+                        if (!input) input = document.querySelector('input[placeholder="Enter Stake"]');
+
+                        if (input) {
+                            // B. Fill Input Strategy
+                            const fillInput = (fillRetries = 50) => {
+                                // Re-fetch input to be safe
+                                let freshInput = document.getElementById('market-order-amount-input');
+                                if (!freshInput) freshInput = document.querySelector('input[data-testid="input-bet-amount"]');
+                                if (!freshInput) freshInput = document.querySelector('input[placeholder="Enter Stake"]');
+                                // New Fallback: Look inside the specific svelte classes provided
+                                if (!freshInput) freshInput = document.querySelector('.input-content input');
+                                if (!freshInput) freshInput = document.querySelector('input[type="number"][step="1e-8"]');
+
+                                if (freshInput) {
+                                    // Ensure we are interacting with the layout
+                                    if (fillRetries % 5 === 0) freshInput.click();
+
+                                    if (freshInput.value !== stakeAmt.toString()) {
+                                        console.log(`[Auto-Bet] Persistence Check: Typing ${stakeAmt}...`);
+
+                                        // 1. Force Reset (Clear) first
+                                        if (fillRetries % 3 === 0) {
+                                            freshInput.value = '';
+                                            freshInput.dispatchEvent(new Event('input', { bubbles: true }));
+                                        }
+
+                                        // 2. Type New Value
+                                        simulateUserTyping(freshInput, stakeAmt.toString());
+
+                                        // Retry if not set
+                                        setTimeout(() => {
+                                            if (freshInput.value !== stakeAmt.toString() && fillRetries > 0) {
+                                                fillInput(fillRetries - 1);
+                                            }
+                                        }, 100);
+                                    } else {
+                                        console.log("[Auto-Bet] Input filled correctly.");
+                                    }
+                                }
+                            };
+
+                            // Start persistent fill
+                            fillInput();
+
+                            // C. Find & Click "Place Bet"
+                            // Wait for the button to become enabled
+                            const findAndPlace = (btnRetries = 20) => {
+                                // Stake Specific: data-testid="betSlip-place-bets-button"
+                                // Also "Place Bet" text check just in case
+                                let placeBtn = document.querySelector('button[data-testid="betSlip-place-bets-button"]');
+
+                                if (placeBtn) {
+                                    if (!placeBtn.disabled && !placeBtn.hasAttribute('disabled')) {
+                                        console.log("[Auto-Bet] Place Bet button enabled. Clicking!");
+                                        placeBtn.click();
+                                        // Optional: Send success update to BG?
+                                    } else {
+                                        // Button found but disabled
+                                        if (btnRetries > 0) {
+                                            // Maybe verify input value persisted?
+                                            if (input.value !== stakeAmt.toString()) {
+                                                console.log("[Auto-Bet] Input value lost? Refilling...");
+                                                setNativeValue(input, stakeAmt.toString());
+                                            }
+                                            setTimeout(() => findAndPlace(btnRetries - 1), 100);
+                                        } else {
+                                            console.warn("[Auto-Bet] Place button stuck disabled.");
+                                        }
+                                    }
+                                } else {
+                                    // Button not found yet
+                                    if (btnRetries > 0) {
+                                        setTimeout(() => findAndPlace(btnRetries - 1), 100);
+                                    }
+                                }
+                            };
+
+                            // Give React a moment to register value
+                            setTimeout(() => findAndPlace(), 200);
+
+                        } else {
+                            // Input not found
+                            if (retries > 0) {
+                                setTimeout(() => processBetSlip(retries - 1), 100); // 100ms
+                            } else {
+                                console.warn("[Auto-Bet] Input field never appeared.");
+                            }
+                        }
+                    };
+
+                    // 3. Logic: Conditional Clear -> Click -> processBetSlip
+                    const performBet = async () => {
+                        // A. Check Badge Count
+                        const badge = document.getElementById('bet-slip-count-badge');
+                        let count = 0;
+                        if (badge) count = parseInt(badge.textContent.trim()) || 0;
+
+                        // B. Clear if needed
+                        if (count >= 1) {
+                            const clearBtn = document.querySelector('button[data-testid="reset-betslip"]');
+                            if (clearBtn) {
+                                console.log(`[Auto-Bet] Slip has ${count} items. Clearing...`);
+                                clearBtn.click();
+                                await new Promise(r => setTimeout(r, 300));
+                            }
+                        } else {
+                            console.log("[Auto-Bet] Slip is empty. No clear needed.");
+                        }
+
+                        // C. Find Button Rule
+                        let btn = null;
+                        if (btnId) btn = document.getElementById(btnId);
+
+                        if (!btn) {
+                            // Stake/SX
+                            const stakeBtn = document.querySelector(`button[aria-label="${teamName}"], button[aria-label="${teamName} "]`);
+                            if (stakeBtn) {
+                                btn = stakeBtn;
+                            } else {
+                                // Fallback
+                                const candidates = document.querySelectorAll('button.trading-button, button[class*="trading-button"], button[data-testid="fixture-outcome"], button.outcome');
+                                for (const b of candidates) {
+                                    if (b.textContent.trim().toUpperCase() === teamName.toUpperCase()) {
+                                        btn = b;
+                                        break;
+                                    }
+                                }
+                                if (!btn) {
+                                    for (const b of candidates) {
+                                        const nameSpan = b.querySelector('[data-testid="outcome-button-name"]');
+                                        const textToCheck = nameSpan ? nameSpan.textContent : b.textContent;
+                                        if (textToCheck.toUpperCase().includes(teamName.toUpperCase())) {
+                                            btn = b;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // D. Click
+                        if (btn) {
+                            console.log("[Auto-Bet] Button found:", btn);
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            const originalBorder = btn.style.border;
+                            btn.style.border = "4px solid #00ff00";
+
+                            setTimeout(() => {
+                                btn.click();
+                                btn.style.border = originalBorder;
+                                console.log("[Auto-Bet] Clicked button. Waiting for input.");
+                                // E. Start Waiting for Input
+                                processBetSlip();
+                            }, 300);
+                            return { success: true };
+                        } else {
+                            console.error("[Auto-Bet] Button not found for " + teamName);
+                            return { success: false, error: "Button not found", team: teamName };
+                        }
+                    };
+
+                    performBet();
+                },
+                args: [targetTeam, targetId, finalAmount]
+            }, (results) => {
+                if (chrome.runtime.lastError) {
+                    console.error("Script Injection Failed:", chrome.runtime.lastError.message);
+                    if (retries > 0) {
+                        setTimeout(() => triggerClick(tabId, retries - 1, finalAmount), 500);
                     }
                 } else {
-                    console.log("Click command sent & acknowledged");
+                    console.log("Injection Success", results);
                 }
             });
         };
 
-        // 1. Check if tab exists
-        chrome.tabs.query({}, (tabs) => {
-            const existingTab = tabs.find(t => t.url === url || t.url.includes(url));
-            if (existingTab) {
-                chrome.tabs.update(existingTab.id, { active: true }, () => {
-                    // Wait a bit for focus
-                    setTimeout(() => triggerClick(existingTab.id), 1000);
-                });
+        // Determine the final amount to use (Test Mode overrides button amount)
+        chrome.storage.local.get(['testModeEnabled', 'testAmount'], (res) => {
+            let finalAmount = request.amount || 0;
+
+            // If Test Mode is ON, always use testAmount
+            if (res.testModeEnabled === true && res.testAmount > 0) {
+                finalAmount = res.testAmount;
+                console.log(`[Auto-Bet] Test Mode ON: Using fixed amount $${finalAmount}`);
             } else {
-                chrome.tabs.create({ url: url, active: true }, (newTab) => {
-                    // Wait for load
-                    const listener = (tabId, changeInfo) => {
-                        if (tabId === newTab.id && changeInfo.status === 'complete') {
-                            chrome.tabs.onUpdated.removeListener(listener);
-                            setTimeout(() => triggerClick(newTab.id), 2000);
-                        }
-                    };
-                    chrome.tabs.onUpdated.addListener(listener);
-                });
+                console.log(`[Auto-Bet] Normal Mode: Using amount $${finalAmount}`);
             }
+
+            // Find or create tab
+            chrome.tabs.query({}, (tabs) => {
+                const existingTab = tabs.find(t => t.url === url || t.url.includes(url));
+                if (existingTab) {
+                    chrome.tabs.update(existingTab.id, { active: true }, () => {
+                        setTimeout(() => triggerClick(existingTab.id, 3, finalAmount), 1000);
+                    });
+                } else {
+                    chrome.tabs.create({ url: url, active: true }, (newTab) => {
+                        const listener = (tabId, changeInfo) => {
+                            if (tabId === newTab.id && changeInfo.status === 'complete') {
+                                chrome.tabs.onUpdated.removeListener(listener);
+                                setTimeout(() => triggerClick(newTab.id, 3, finalAmount), 2000);
+                            }
+                        };
+                        chrome.tabs.onUpdated.addListener(listener);
+                    });
+                }
+            });
         });
         return true;
     }

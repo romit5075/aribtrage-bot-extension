@@ -121,7 +121,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     url: url,
                     team: team,
                     id: btnId,
-                    amount: stakeAmt,
+                    amount: parseFloat(stakeAmt), // Force Float
                     expectedOdds: expectedOdds
                 });
             } else {
@@ -629,49 +629,70 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    function updateUI() {
-        chrome.storage.local.get(['polymarketData', 'stackData', 'strictMatch', 'stakeAmount', 'liveScanEnabled', 'geminiApiKey'], async (result) => {
-            try {
-                const poly = result.polymarketData;
-                const stack = result.stackData;
-                const stakeAmt = result.stakeAmount || 100; // Default 100 if not set
-                const isLive = result.liveScanEnabled === true;
-                const apiKey = result.geminiApiKey;
-                const isStrict = result.strictMatch === true;
-                console.log("[updateUI] Data loaded:", { poly: poly?.odds?.length, stack: stack?.odds?.length, isStrict, apiKey });
+    async function updateUI() {
+        try {
+            const result = await chrome.storage.local.get(['polymarketData', 'stackData', 'strictMatch', 'stakeAmount', 'liveScanEnabled', 'geminiApiKey', 'aiEnabled']);
+            const poly = result.polymarketData;
+            const stack = result.stackData;
+            const stakeAmt = result.stakeAmount || 100; // Default 100 if not set
+            const isLive = result.liveScanEnabled === true;
+            const apiKey = result.geminiApiKey;
+            const aiEnabled = result.aiEnabled === true; // Check toggle
+            const isStrict = result.strictMatch === true;
+            const testMode = result.testModeEnabled === true;
+            const testAmount = result.testAmount || 1;
 
-                let html = '';
+            console.log("[updateUI] Data loaded:", { poly: poly?.odds?.length, stack: stack?.odds?.length, isStrict, apiKey, aiEnabled, testMode });
 
-                if (!poly && !stack) {
-                    html = '<p>No data collected.</p>';
+            // Update Input Visibility
+            const mainStakeInput = document.getElementById('mainStakeInput');
+            const testAmtInput = document.getElementById('testAmountInput');
+            const testLabel = document.getElementById('testModeLabel');
+
+            if (testLabel) testLabel.style.color = testMode ? '#e67e22' : '#95a5a6';
+
+            if (mainStakeInput && testAmtInput) {
+                if (testMode) {
+                    mainStakeInput.style.display = 'none';
+                    testAmtInput.style.display = 'inline-block';
+                    testAmtInput.value = testAmount;
                 } else {
-                    const now = new Date().toLocaleTimeString();
-                    const liveIndicator = isLive ? '<span style="color:#27ae60; font-weight:bold;">● LIVE</span>' : '';
-
-                    if (poly) {
-                        html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams ${liveIndicator} <span style="margin-left:10px; color:#3498db;">Updated: ${now}</span></p>`;
-                    }
-                    if (stack) {
-                        html += `<p style="font-size:10px; color:#aaa;">Stake Data: ${stack.odds.length} teams</p>`;
-                    }
-
-                    if (poly && stack) {
-                        html += await generateArbitrageTable(poly.odds, stack.odds, isStrict, stakeAmt, apiKey);
-                    }
+                    mainStakeInput.style.display = 'inline-block';
+                    testAmtInput.style.display = 'none';
                 }
-                if (resultsArea) {
-                    resultsArea.innerHTML = html;
-                } else {
-                    console.error("resultsArea not found!");
-                }
-            } catch (err) {
-                console.error("Error updating UI:", err);
-                if (resultsArea) resultsArea.innerHTML = `<p style="color:red">Error rendering table: ${err.message}</p>`;
             }
-        });
-    }
 
-    async function generateArbitrageTable(polyOdds, stackOdds, strictMatch, stakeAmount, apiKey) {
+
+            let html = '';
+
+            if (!poly && !stack) {
+                html = '<p>No data collected.</p>';
+            } else {
+                const now = new Date().toLocaleTimeString();
+                const liveIndicator = isLive ? '<span style="color:#27ae60; font-weight:bold;">● LIVE</span>' : '';
+
+                if (poly) {
+                    html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams ${liveIndicator} <span style="margin-left:10px; color:#3498db;">Updated: ${now}</span></p>`;
+                }
+                if (stack) {
+                    html += `<p style="font-size:10px; color:#aaa;">Stake Data: ${stack.odds.length} teams</p>`;
+                }
+
+                if (poly && stack) {
+                    html += await generateArbitrageTable(poly.odds, stack.odds, isStrict, stakeAmt, apiKey, aiEnabled, testMode, testAmount);
+                }
+            }
+            if (resultsArea) {
+                resultsArea.innerHTML = html;
+            } else {
+                console.error("resultsArea not found!");
+            }
+        } catch (err) {
+            console.error("Error updating UI:", err);
+            if (resultsArea) resultsArea.innerHTML = `<p style="color:red">Error rendering table: ${err.message}</p>`;
+        }
+    }
+    async function generateArbitrageTable(polyOdds, stackOdds, strictMatch, stakeAmount, apiKey, aiEnabled, testMode, testAmount) {
         // Goal Table Format:
         // Match (e.g. HOU-DEN) | Poly HOU | Poly DEN | Stake HOU | Stake DEN | Arb % (P-HOU/S-DEN) | Arb % (P-DEN/S-HOU)
 
@@ -1040,7 +1061,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 let awayResult = findOdds(groupItems, stakeAway.team, stakeAway.eventTime);
 
                 // AI Verify Home
-                if (homeResult && homeResult.confidence >= 15 && homeResult.confidence < 45 && apiKey && window.geminiMatcher) {
+                if (homeResult && homeResult.confidence >= 15 && homeResult.confidence < 45 && apiKey && aiEnabled && window.geminiMatcher) {
                     try {
                         const aiRes = await window.geminiMatcher.verifyMatch(stakeHome.team, homeResult.item.team, apiKey);
                         if (aiRes === 'SAME') homeResult.confidence = 80;
@@ -1049,7 +1070,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 // AI Verify Away
-                if (awayResult && awayResult.confidence >= 15 && awayResult.confidence < 45 && apiKey && window.geminiMatcher) {
+                if (awayResult && awayResult.confidence >= 15 && awayResult.confidence < 45 && apiKey && aiEnabled && window.geminiMatcher) {
                     try {
                         const aiRes = await window.geminiMatcher.verifyMatch(stakeAway.team, awayResult.item.team, apiKey);
                         if (aiRes === 'SAME') awayResult.confidence = 80;
@@ -1217,6 +1238,23 @@ document.addEventListener('DOMContentLoaded', () => {
                                 stakeLink: stakeHome.link
                             });
                         }
+                    }
+
+                    // CRITICAL FIX: Apple Test Mode Override unconditionally (outside arb check)
+                    if (testMode) {
+                        s1_home_val = testAmount;
+                        s1_away_val = testAmount;
+                        s2_home_val = testAmount;
+                        s2_away_val = testAmount;
+
+                        // Update Displays if they were empty (case: no arb)
+                        // Note: If no arb, split logic above didn't run, so displays are empty strings.
+                        // We should ensure they show the test amount.
+                        const style = 'color:#e67e22; font-weight:bold;';
+                        s1_home_disp = `<span class="stake-display" style="${style}">$${testAmount}</span>`;
+                        s1_away_disp = `<span class="stake-display" style="${style}">$${testAmount}</span>`;
+                        s2_home_disp = `<span class="stake-display" style="${style}">$${testAmount}</span>`;
+                        s2_away_disp = `<span class="stake-display" style="${style}">$${testAmount}</span>`;
                     }
 
                     // Button Styles
@@ -1502,14 +1540,76 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Auto-Update UI when storage changes (Monitoring)
+    // Auto-Update UI when storage changes
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace === 'local') {
-            if (changes.polymarketData || changes.stackData || changes.strictMatch) {
+            if (changes.polymarketData || changes.stackData || changes.strictMatch || changes.stakeAmount || changes.aiEnabled) {
                 updateUI();
             }
         }
     });
+
+    // --- AI & Stake Control Logic ---
+    const toggleAI = document.getElementById('toggleAI');
+    const aiStatusLabel = document.getElementById('aiStatusLabel');
+    if (toggleAI) {
+        // Load AI State
+        chrome.storage.local.get(['aiEnabled'], (res) => {
+            const isActive = res.aiEnabled !== false; // Default true?
+            // Actually user asked to "turn on", implies default might be OFF or "turnable".
+            // Let's stick to reading storage. If undefined, maybe default to false to be safe?
+            toggleAI.checked = !!res.aiEnabled;
+            if (aiStatusLabel) aiStatusLabel.style.color = toggleAI.checked ? '#27ae60' : '#95a5a6';
+        });
+
+        toggleAI.addEventListener('change', () => {
+            const isActive = toggleAI.checked;
+            if (aiStatusLabel) aiStatusLabel.style.color = isActive ? '#27ae60' : '#95a5a6';
+            chrome.storage.local.set({ aiEnabled: isActive });
+        });
+    }
+
+    const mainStakeInput = document.getElementById('mainStakeInput');
+    if (mainStakeInput) {
+        // Load Stake
+        chrome.storage.local.get(['stakeAmount'], (res) => {
+            mainStakeInput.value = res.stakeAmount || 100;
+        });
+
+        mainStakeInput.addEventListener('change', () => {
+            const val = parseFloat(mainStakeInput.value);
+            if (!isNaN(val) && val > 0) {
+                chrome.storage.local.set({ stakeAmount: val });
+            }
+        });
+    }
+
+    // --- Test Mode Logic ---
+    const toggleTestMode = document.getElementById('toggleTestMode');
+    const testAmountInput = document.getElementById('testAmountInput');
+
+    if (toggleTestMode && testAmountInput) {
+        chrome.storage.local.get(['testModeEnabled', 'testAmount'], (res) => {
+            toggleTestMode.checked = !!res.testModeEnabled;
+            testAmountInput.value = res.testAmount || 1;
+            updateUI(); // Refresh UI state based on loaded values
+        });
+
+        toggleTestMode.addEventListener('change', () => {
+            const isActive = toggleTestMode.checked;
+            chrome.storage.local.set({ testModeEnabled: isActive });
+            updateUI();
+        });
+
+        testAmountInput.addEventListener('input', () => {
+            const val = parseFloat(testAmountInput.value);
+            if (!isNaN(val) && val > 0) {
+                chrome.storage.local.set({ testAmount: val });
+                updateUI();
+            }
+        });
+    }
+
     // --- Settings Toggle Logic ---
     const settingsToggleBtn = document.getElementById('settingsToggleBtn');
     const settingsContainer = document.getElementById('settingsContainer');
