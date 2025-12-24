@@ -138,6 +138,14 @@
         <span class="slider round"
           style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px;"></span>
       </label>
+
+      <span id="highlightStatusLabel"
+        style="font-size: 10px; font-weight: bold; color: #27ae60; margin-left:5px;">Highlight</span>
+      <label class="switch" style="position: relative; display: inline-block; width: 28px; height: 16px;">
+        <input type="checkbox" id="toggleHighlight" checked>
+        <span class="slider round"
+          style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 34px;"></span>
+      </label>
     </div>
   </div>
 
@@ -202,6 +210,12 @@
     <h4 style="margin: 0 0 10px 0; border-bottom: 1px solid #eee; padding-bottom: 5px;">Bot Settings</h4>
 
     <label style="display:block; text-align:left; font-size:11px; margin-bottom:5px;">
+      Gemini API Key (Optional for AI Matching):
+      <input type="password" id="geminiApiKey" style="width: 100%; box-sizing: border-box;"
+        placeholder="AI matching disabled">
+    </label>
+
+    <label style="display:block; text-align:left; font-size:11px; margin-bottom:5px;">
       Telegram Bot Token:
       <input type="password" id="tgBotToken" style="width: 100%; box-sizing: border-box;">
     </label>
@@ -255,6 +269,7 @@
   </div>
 
   <script src="arbitrageLogic.js"></script>
+  <script src="ai_matcher.js"></script>
   <script src="popup.js"></script>
 </body>
 

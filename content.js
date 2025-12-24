@@ -2,7 +2,7 @@
 window.scrapePageData = scrapePageData;
 
 // Debug function to see what's being scraped
-window.debugScrape = function() {
+window.debugScrape = function () {
     const data = scrapePageData();
     console.log('[DEBUG] Scraped Data:', JSON.stringify(data, null, 2));
     console.log('[DEBUG] Teams found:', data.odds.map(o => `${o.team} @ ${o.odds}`).join(', '));
@@ -15,34 +15,37 @@ function scrapePageData() {
 
     const parsePolyOdds = (str) => {
         if (!str) return null;
-        if (str.toLowerCase().includes('suspended')) return 'Suspended';
+        const lower = str.toLowerCase();
+        if (lower.includes('suspended')) return 'Suspended';
+        if (lower.includes('settled')) return 'Settled';
 
-        // 1. Try Cents (e.g. 78¢)
+        // 1. Try Cents with symbol (e.g. 78¢) - STRICT for Settled check
         const matchCents = str.match(/(\d+)\s*¢/);
         if (matchCents) {
             const cents = parseInt(matchCents[1], 10);
+            if (cents >= 100) return 'Settled'; // Explicit cents >= 100 is Settled
             return cents > 0 ? (100 / cents).toFixed(2) : null;
         }
 
-        // 2. Try Decimal (e.g. 1.28, 1.85)
-        // If it's already a decimal odds value (typically 1.01 to 100.00)
+        // 2. Try Decimal (e.g. 1.28, 105.0)
         const matchDecimal = str.match(/(\d+\.\d+)/);
         if (matchDecimal) {
             const val = parseFloat(matchDecimal[1]);
-            // If value looks like decimal odds (1.01 to 100), return as-is
-            // If it looks like cents converted wrongly (0.xx), convert
-            if (val >= 1.01 && val <= 100) {
+            // Allow decimal odds > 100 as requested
+            if (val >= 1.01) {
                 return val;
             }
         }
 
-        // 3. Try plain integer as cents (e.g., "52" means 52 cents)
+        // 3. Try plain integer
         const matchInt = str.match(/^(\d+)$/);
         if (matchInt) {
-            const cents = parseInt(matchInt[1], 10);
-            if (cents > 0 && cents <= 100) {
-                return (100 / cents).toFixed(2);
-            }
+            const val = parseInt(matchInt[1], 10);
+            // If >= 100, assume it is Decimal Odds (e.g. 150), unless it has ¢ symbol (handled above)
+            if (val >= 100) return val;
+
+            // If < 100, assume it is Cents (e.g. 52 -> 52¢)
+            if (val > 0) return (100 / val).toFixed(2);
         }
 
         return null;
@@ -55,110 +58,163 @@ function scrapePageData() {
         return match ? parseFloat(match[1]) : null;
     };
 
-    // Time Parser
-    const parseTime = (dateStr, timeStr) => {
+    // Time Parser - Returns normalized timestamp string "YYYY-MM-DD HH:MM"
+    const parseEventTime = (dateStr, timeStr) => {
         try {
-            // Normalize to "Dec 22 2:00 AM" or similar key
-            const dBase = dateStr.replace(/^[A-Za-z]+, /, '').replace('December', 'Dec').trim();
-            return `${dBase} ${timeStr}`;
+            if (!dateStr && !timeStr) return null;
+
+            // Normalize date: "Fri, Dec 26" or "Thu, December 25" -> "Dec 26"
+            let dBase = (dateStr || '').replace(/^[A-Za-z]+,\s*/, '').trim();
+            dBase = dBase.replace('December', 'Dec').replace('January', 'Jan').replace('February', 'Feb');
+
+            // Normalize time: "6:30 AM" -> "06:30"
+            let tNorm = (timeStr || '').trim();
+            const timeMatch = tNorm.match(/(\d{1,2}):(\d{2})\s*(AM|PM)?/i);
+            if (timeMatch) {
+                let h = parseInt(timeMatch[1]);
+                const m = timeMatch[2];
+                const ampm = (timeMatch[3] || '').toUpperCase();
+                if (ampm === 'PM' && h < 12) h += 12;
+                if (ampm === 'AM' && h === 12) h = 0;
+                tNorm = `${h.toString().padStart(2, '0')}:${m}`;
+            }
+
+            // Assume current year
+            const year = new Date().getFullYear();
+            return `${year}-${dBase} ${tNorm}`.trim();
         } catch (e) { return null; }
     };
 
+    // NBA City/Team Mappings for fuzzy match
+    const NBA_CITY_MAPPINGS = {
+        'ROCKETS': ['HOUSTON ROCKETS', 'HOUSTON', 'HOU'],
+        'LAKERS': ['LOS ANGELES LAKERS', 'LA LAKERS', 'LAL', 'LOS ANGELES'],
+        'KNICKS': ['NEW YORK KNICKS', 'NY KNICKS', 'NYK', 'NEW YORK'],
+        'CAVALIERS': ['CLEVELAND CAVALIERS', 'CLEVELAND', 'CLE', 'CAVS'],
+        'CELTICS': ['BOSTON CELTICS', 'BOSTON', 'BOS'],
+        'WARRIORS': ['GOLDEN STATE WARRIORS', 'GOLDEN STATE', 'GSW', 'GS'],
+        'MAVERICKS': ['DALLAS MAVERICKS', 'DALLAS', 'DAL', 'MAVS'],
+        'SPURS': ['SAN ANTONIO SPURS', 'SAN ANTONIO', 'SAS'],
+        'THUNDER': ['OKLAHOMA CITY THUNDER', 'OKC', 'OKLAHOMA CITY'],
+        'SUNS': ['PHOENIX SUNS', 'PHOENIX', 'PHX'],
+        'BUCKS': ['MILWAUKEE BUCKS', 'MILWAUKEE', 'MIL'],
+        'HEAT': ['MIAMI HEAT', 'MIAMI', 'MIA'],
+        'BULLS': ['CHICAGO BULLS', 'CHICAGO', 'CHI'],
+        'NETS': ['BROOKLYN NETS', 'BROOKLYN', 'BKN'],
+        '76ERS': ['PHILADELPHIA 76ERS', 'PHILLY', 'PHI', 'SIXERS'],
+        'RAPTORS': ['TORONTO RAPTORS', 'TORONTO', 'TOR'],
+        'HAWKS': ['ATLANTA HAWKS', 'ATLANTA', 'ATL'],
+        'HORNETS': ['CHARLOTTE HORNETS', 'CHARLOTTE', 'CHA'],
+        'WIZARDS': ['WASHINGTON WIZARDS', 'WASHINGTON', 'WAS'],
+        'MAGIC': ['ORLANDO MAGIC', 'ORLANDO', 'ORL'],
+        'PACERS': ['INDIANA PACERS', 'INDIANA', 'IND'],
+        'PISTONS': ['DETROIT PISTONS', 'DETROIT', 'DET'],
+        'CLIPPERS': ['LA CLIPPERS', 'LOS ANGELES CLIPPERS', 'LAC'],
+        'KINGS': ['SACRAMENTO KINGS', 'SACRAMENTO', 'SAC'],
+        'TRAIL BLAZERS': ['PORTLAND TRAIL BLAZERS', 'PORTLAND', 'POR', 'BLAZERS'],
+        'JAZZ': ['UTAH JAZZ', 'UTAH', 'UTA'],
+        'NUGGETS': ['DENVER NUGGETS', 'DENVER', 'DEN'],
+        'TIMBERWOLVES': ['MINNESOTA TIMBERWOLVES', 'MINNESOTA', 'MIN', 'WOLVES'],
+        'PELICANS': ['NEW ORLEANS PELICANS', 'NEW ORLEANS', 'NOP'],
+        'GRIZZLIES': ['MEMPHIS GRIZZLIES', 'MEMPHIS', 'MEM']
+    };
+
     // 1. Polymarket Scraper
+    // Track current date from date headers (they appear before event containers)
+    let polyCurrentDate = null;
+
+    // First pass: Collect all date headers
+    document.querySelectorAll('[data-item-index]').forEach(item => {
+        const dateP = item.querySelector('p.font-semibold');
+        if (dateP) {
+            const text = dateP.textContent.trim();
+            // Check if this looks like a date (e.g., "Thu, December 25")
+            if (/[A-Za-z]+,?\s*[A-Za-z]+\s*\d{1,2}/.test(text)) {
+                polyCurrentDate = text;
+            }
+        }
+    });
+
     // Group by match/event container first
     const polyMarketContainers = document.querySelectorAll('a[href*="/event/"]');
     if (polyMarketContainers.length > 0) {
         data.type = 'polymarket';
-        
+
         polyMarketContainers.forEach(container => {
             const buttons = container.querySelectorAll('button.trading-button, button[class*="trading-button"]');
             const matchTeams = [];
-            
-            buttons.forEach(btn => {
-                let team = 'UNKNOWN';
-                
-                // Get team name ONLY from .opacity-70 - this is ALWAYS the team name
-                const teamNode = btn.querySelector('.opacity-70');
-                if (teamNode) {
-                    let rawTeam = teamNode.textContent.trim().toUpperCase();
-                    
-                    // Aggressive cleaning for team names:
-                    // 1. Remove any decimal numbers (odds that leaked in)
-                    rawTeam = rawTeam.replace(/\d+\.\d+/g, '').trim();
-                    // 2. Remove cents pattern
-                    rawTeam = rawTeam.replace(/\d+¢/g, '').trim();
-                    // 3. Remove standalone numbers at end that look like odds (1-999)
-                    rawTeam = rawTeam.replace(/\s+\d{1,3}$/g, '').trim();
-                    // 4. If starts with number and has more digits after space, only keep first part
-                    // e.g., "33 208" -> "33"
-                    if (/^\d+/.test(rawTeam)) {
-                        const numParts = rawTeam.split(/\s+/);
-                        if (numParts.length >= 2 && /^\d+$/.test(numParts[0]) && /^\d+$/.test(numParts[1])) {
-                            rawTeam = numParts[0]; // Only keep first number
-                        }
+
+            // Extract matchId from the container link (unique per event)
+            const matchLink = container.href || '';
+            const matchIdMatch = matchLink.match(/\/event\/([^/?#]+)/);
+            const matchId = matchIdMatch ? matchIdMatch[1] : null;
+
+            // Detect LIVE game
+            let isLive = false;
+            const liveIndicator = container.querySelector('.text-red-500, [class*="text-red"], [class*="uppercase"]');
+            if (liveIndicator && /live/i.test(liveIndicator.textContent)) {
+                isLive = true;
+            }
+
+            // Extract time from the container (e.g., "10:30 PM")
+            let eventTime = null;
+            const timeP = container.querySelector('.text-xs.text-text-primary, p[class*="text-text-primary"]');
+            if (timeP) {
+                const timeText = timeP.textContent.trim();
+                if (/\d{1,2}:\d{2}\s*(AM|PM)?/i.test(timeText)) {
+                    eventTime = parseEventTime(polyCurrentDate, timeText);
+                }
+            }
+
+            // If live, set eventTime to "LIVE" for matching purposes
+            if (isLive) {
+                eventTime = 'LIVE';
+            }
+
+            // Try to extract date from nearest parent/sibling if not set
+            if (!polyCurrentDate && !isLive) {
+                let el = container.previousElementSibling;
+                while (el) {
+                    const dateP = el.querySelector('p.font-semibold');
+                    if (dateP && /[A-Za-z]+,?\s*[A-Za-z]+\s*\d{1,2}/.test(dateP.textContent)) {
+                        polyCurrentDate = dateP.textContent.trim();
+                        eventTime = parseEventTime(polyCurrentDate, eventTime);
+                        break;
                     }
-                    // 5. If team name has same token twice, dedupe
-                    // e.g., "33 33" -> "33", "GENONE GENONE" -> "GENONE"
-                    const parts = rawTeam.split(/\s+/);
-                    if (parts.length === 2 && parts[0] === parts[1]) {
-                        rawTeam = parts[0];
+                    el = el.previousElementSibling;
+                }
+            }
+
+            // Try to get full team names from the row/container (not just button labels)
+            const fullTeamNames = [];
+
+            // Look for team name elements in the container (outside buttons)
+            const textNodes = container.querySelectorAll('span, div, p');
+            textNodes.forEach(node => {
+                if (node.closest('button')) return;
+
+                const text = node.textContent.trim();
+                if (text.length >= 3 &&
+                    !/^(LIVE|Game \d|Best of \d|\$[\d.]+k|Vol\.|Game View|Load More|\d+)$/i.test(text) &&
+                    !/^\d+\.\d+$/.test(text) &&
+                    !text.includes('¢')) {
+
+                    if (/[A-Za-z]{2,}/.test(text) && text.length <= 50) {
+                        fullTeamNames.push(text.toUpperCase());
                     }
-                    
-                    team = rawTeam;
-                }
-                
-                // Get odds - try multiple approaches
-                let odds = null;
-                
-                // Method 1: Direct odds span with .ml-1 class (new Polymarket format)
-                const oddsSpan = btn.querySelector('.ml-1, [class*="ml-1"]');
-                if (oddsSpan) {
-                    const oddsText = oddsSpan.textContent.trim();
-                    odds = parsePolyOdds(oddsText);
-                }
-                
-                // Method 2: Fallback - clone and remove team element
-                if (!odds) {
-                    const clone = btn.cloneNode(true);
-                    const tags = clone.querySelectorAll('.odds-converted-tag');
-                    tags.forEach(t => t.remove());
-                    const teamEl = clone.querySelector('.opacity-70');
-                    if (teamEl) teamEl.remove();
-                    
-                    const rawText = clone.textContent.trim();
-                    odds = parsePolyOdds(rawText);
-                }
-                
-                if (team && team !== 'UNKNOWN' && team.length > 0 && odds) {
-                    matchTeams.push({
-                        team,
-                        odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
-                        source: 'Poly',
-                        link: container.href || window.location.href,
-                        id: btn.id
-                    });
                 }
             });
-            
-            // Add teams from this match to data
-            // This keeps teams from the same match together
-            matchTeams.forEach(t => data.odds.push(t));
-        });
-    }
-    
-    // Fallback: Original button-based scraper if no containers found
-    if (data.odds.length === 0) {
-        const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
-        if (polyButtons.length > 0) {
-            data.type = 'polymarket';
-            polyButtons.forEach(btn => {
+
+            buttons.forEach((btn, btnIndex) => {
                 let team = 'UNKNOWN';
-                
-                // Get team name from .opacity-70
+                let fullTeam = null;
+
+                // Get short team name from button's .opacity-70
                 const teamNode = btn.querySelector('.opacity-70');
+                let shortName = '';
                 if (teamNode) {
                     let rawTeam = teamNode.textContent.trim().toUpperCase();
-                    
+
                     // Aggressive cleaning for team names:
                     rawTeam = rawTeam.replace(/\d+\.\d+/g, '').trim();
                     rawTeam = rawTeam.replace(/\d+¢/g, '').trim();
@@ -173,53 +229,197 @@ function scrapePageData() {
                     if (parts.length === 2 && parts[0] === parts[1]) {
                         rawTeam = parts[0];
                     }
-                    
+
+                    shortName = rawTeam;
                     team = rawTeam;
                 }
-                
-                // Get odds - try multiple approaches
+
+                // Try to find matching full team name from the container
+                if (shortName && fullTeamNames.length > 0) {
+                    for (const fullName of fullTeamNames) {
+                        if (fullName.startsWith(shortName) ||
+                            fullName.includes(shortName + ' ') ||
+                            fullName.split(/\s+/)[0] === shortName) {
+                            fullTeam = fullName;
+                            break;
+                        }
+                    }
+                }
+
+                if (fullTeam) {
+                    team = fullTeam;
+                }
+
+                // Get odds
                 let odds = null;
-                
-                // Method 1: Direct odds span with .ml-1 class
                 const oddsSpan = btn.querySelector('.ml-1, [class*="ml-1"]');
                 if (oddsSpan) {
                     const oddsText = oddsSpan.textContent.trim();
                     odds = parsePolyOdds(oddsText);
                 }
-                
-                // Method 2: Fallback - clone and remove team element
+
                 if (!odds) {
                     const clone = btn.cloneNode(true);
                     const tags = clone.querySelectorAll('.odds-converted-tag');
                     tags.forEach(t => t.remove());
                     const teamEl = clone.querySelector('.opacity-70');
                     if (teamEl) teamEl.remove();
-                    
+
                     const rawText = clone.textContent.trim();
                     odds = parsePolyOdds(rawText);
                 }
 
-                const linkEl = btn.closest('a');
-                const link = linkEl ? linkEl.href : window.location.href;
+                if (team && team !== 'UNKNOWN' && team.length > 0 && odds) {
+                    // DEDUPLICATION: Check if we already have this team from this link/source
+                    const exists = matchTeams.some(x => x.team === team && x.odds === (odds === 'Suspended' ? 'Suspended' : parseFloat(odds)));
+                    if (!exists) {
+                        matchTeams.push({
+                            team,
+                            odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
+                            source: 'Poly',
+                            link: container.href || window.location.href,
+                            id: btn.id,
+                            eventTime: eventTime,
+                            matchId: matchId,
+                            isLive: isLive
+                        });
+                    }
+                }
+            });
 
-                if (team !== 'UNKNOWN' && odds) {
-                    data.odds.push({
-                        team,
-                        odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
-                        source: 'Poly',
-                        link: link,
-                        id: btn.id
+            matchTeams.forEach(t => data.odds.push(t));
+        });
+    }
+
+    // Fallback: Group by parent container if strict containers match failed
+    if (data.odds.length === 0) {
+        // Try to find list items or rows that contain trading buttons
+        const potentialRows = document.querySelectorAll('li, div.gap-2, div.grid');
+
+        let foundViaRows = false;
+        if (potentialRows.length > 0) {
+            potentialRows.forEach((row, idx) => {
+                const buttons = row.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+                if (buttons.length >= 2) {
+                    foundViaRows = true;
+                    // Treat this row as a group/match
+                    // Generate a pseudo-link ID for grouping
+                    const pseudoLink = window.location.href + `#group-${idx}`;
+
+                    // Try to find date/time in this row or previous sibling
+                    let eventTime = null;
+                    let isLive = false;
+
+                    // Simple Live check
+                    if (row.textContent.includes('Live')) isLive = true;
+                    if (isLive) eventTime = 'LIVE';
+
+                    buttons.forEach(btn => {
+                        let team = 'UNKNOWN';
+                        const teamNode = btn.querySelector('.opacity-70');
+                        if (teamNode) {
+                            team = teamNode.textContent.trim().toUpperCase()
+                                .replace(/\d+\.\d+/g, '').replace(/\d+¢/g, '').replace(/\s+\d{1,3}$/g, '').trim();
+                        }
+
+                        let odds = null;
+                        const oddsSpan = btn.querySelector('.ml-1, [class*="ml-1"]');
+                        if (oddsSpan) odds = parsePolyOdds(oddsSpan.textContent.trim());
+
+                        if (team && odds) {
+                            data.odds.push({
+                                team,
+                                odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
+                                source: 'Poly',
+                                link: pseudoLink, // Use pseudo-link for grouping
+                                matchId: `group-${idx}`,
+                                isLive: isLive,
+                                eventTime: eventTime
+                            });
+                        }
                     });
                 }
             });
         }
-    }
 
-    // 2. Stake/SX Scraper
+        if (!foundViaRows) {
+            // Last resort: Original button-based scraper (flat list)
+            const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+            if (polyButtons.length > 0) {
+                // ... original logic ...
+                data.type = 'polymarket';
+                polyButtons.forEach(btn => {
+                    let team = 'UNKNOWN';
+                    // ... existing extraction ...
+
+
+                    // Get team name from .opacity-70
+                    const teamNode = btn.querySelector('.opacity-70');
+                    if (teamNode) {
+                        let rawTeam = teamNode.textContent.trim().toUpperCase();
+
+                        // Aggressive cleaning for team names:
+                        rawTeam = rawTeam.replace(/\d+\.\d+/g, '').trim();
+                        rawTeam = rawTeam.replace(/\d+¢/g, '').trim();
+                        rawTeam = rawTeam.replace(/\s+\d{1,3}$/g, '').trim();
+                        if (/^\d+/.test(rawTeam)) {
+                            const numParts = rawTeam.split(/\s+/);
+                            if (numParts.length >= 2 && /^\d+$/.test(numParts[0]) && /^\d+$/.test(numParts[1])) {
+                                rawTeam = numParts[0];
+                            }
+                        }
+                        const parts = rawTeam.split(/\s+/);
+                        if (parts.length === 2 && parts[0] === parts[1]) {
+                            rawTeam = parts[0];
+                        }
+
+                        team = rawTeam;
+                    }
+
+                    // Get odds - try multiple approaches
+                    let odds = null;
+
+                    // Method 1: Direct odds span with .ml-1 class
+                    const oddsSpan = btn.querySelector('.ml-1, [class*="ml-1"]');
+                    if (oddsSpan) {
+                        const oddsText = oddsSpan.textContent.trim();
+                        odds = parsePolyOdds(oddsText);
+                    }
+
+                    // Method 2: Fallback - clone and remove team element
+                    if (!odds) {
+                        const clone = btn.cloneNode(true);
+                        const tags = clone.querySelectorAll('.odds-converted-tag');
+                        tags.forEach(t => t.remove());
+                        const teamEl = clone.querySelector('.opacity-70');
+                        if (teamEl) teamEl.remove();
+
+                        const rawText = clone.textContent.trim();
+                        odds = parsePolyOdds(rawText);
+                    }
+
+                    const linkEl = btn.closest('a');
+                    const link = linkEl ? linkEl.href : window.location.href;
+
+                    if (team !== 'UNKNOWN' && odds) {
+                        data.odds.push({
+                            team,
+                            odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
+                            source: 'Poly',
+                            link: link,
+                            id: btn.id,
+                            matchId: 'fallback-flat', // Flat fallback has no match grouping
+                            eventTime: null // No time info in fallback
+                        });
+                    }
+                });
+            }
+        }
+    }     // 2. Stake/SX Scraper
     if (data.odds.length === 0) {
         // Try multiple selector strategies for Stake
         let stackItems = document.querySelectorAll('.outcome-content');
-        
+
         // Alternative selectors if main one doesn't find items
         if (stackItems.length === 0) {
             stackItems = document.querySelectorAll('[data-testid="outcome-button"]');
@@ -227,7 +427,7 @@ function scrapePageData() {
         if (stackItems.length === 0) {
             stackItems = document.querySelectorAll('.outcome-button');
         }
-        
+
         if (stackItems.length > 0) {
             data.type = 'stack';
             stackItems.forEach(item => {
@@ -236,7 +436,7 @@ function scrapePageData() {
                 if (!nameEl) {
                     nameEl = item.querySelector('.outcome-name, .team-name, [class*="name"]');
                 }
-                
+
                 // Also check the button text directly
                 let team = 'UNKNOWN';
                 if (nameEl) {
@@ -246,7 +446,7 @@ function scrapePageData() {
                     const btn = item.closest('button') || item;
                     const allText = btn.innerText || btn.textContent;
                     const lines = allText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-                    
+
                     // First non-numeric line is likely the team name
                     for (const line of lines) {
                         // Skip if it looks like odds
@@ -257,13 +457,13 @@ function scrapePageData() {
                         }
                     }
                 }
-                
+
                 // Get odds
                 let oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
                 if (!oddsContainer) {
                     oddsContainer = item.querySelector('.odds, [class*="odds"]');
                 }
-                
+
                 let odds = null;
                 if (oddsContainer) {
                     odds = parseStakeOdds(oddsContainer.textContent);
@@ -279,13 +479,42 @@ function scrapePageData() {
                     }
                 }
 
-                // Time Extraction
+                // Time Extraction - Parse date and time from fixture-details
                 const fixture = item.closest('[data-testid="fixture-preview"]');
-                let timeKey = null;
+                let eventTime = null;
+                let isLive = false;
+                let matchId = null;
+
                 if (fixture) {
                     const fixtureDetails = fixture.querySelector('.fixture-details');
                     if (fixtureDetails) {
-                        timeKey = fixtureDetails.textContent.trim();
+                        // Detect LIVE game
+                        const liveBadge = fixtureDetails.querySelector('[class*="variant-live"], .badge');
+                        if (liveBadge && /live/i.test(liveBadge.textContent)) {
+                            isLive = true;
+                            eventTime = 'LIVE';
+                        } else {
+                            // Extract separate date and time
+                            const spans = fixtureDetails.querySelectorAll('span[data-ds-text]');
+                            let dateStr = '';
+                            let timeStr = '';
+                            spans.forEach(sp => {
+                                const txt = sp.textContent.trim();
+                                if (/[A-Za-z]+,?\s*[A-Za-z]+\s*\d{1,2}/.test(txt)) {
+                                    dateStr = txt;
+                                } else if (/\d{1,2}:\d{2}\s*(AM|PM)?/i.test(txt)) {
+                                    timeStr = txt;
+                                }
+                            });
+                            eventTime = parseEventTime(dateStr, timeStr);
+                        }
+                    }
+
+                    // Extract matchId from fixture link
+                    const fixtureLink = fixture.querySelector('a[href*="/fixture/"]');
+                    if (fixtureLink) {
+                        const urlMatch = fixtureLink.href.match(/\/fixture\/([^/?#]+)/);
+                        if (urlMatch) matchId = urlMatch[1];
                     }
                 }
 
@@ -300,8 +529,10 @@ function scrapePageData() {
                             team,
                             odds: finalOdds,
                             source: 'Stack',
-                            time: timeKey,
-                            link: link
+                            eventTime: eventTime,
+                            link: link,
+                            matchId: matchId,
+                            isLive: isLive
                         });
                     }
                 }
@@ -344,10 +575,10 @@ function startLiveMonitoring() {
     const pushUpdate = (force = false) => {
         isScanPending = false;
         const data = scrapePageData();
-        
+
         if (data.odds.length > 0) {
             const newSnapshot = createOddsSnapshot(data);
-            
+
             // Only send update if odds actually changed OR force update
             if (force || newSnapshot !== lastOddsSnapshot) {
                 lastOddsSnapshot = newSnapshot;
@@ -380,11 +611,11 @@ function startLiveMonitoring() {
     // Create targeted observers for specific odds containers
     liveObserver = new MutationObserver((mutations) => {
         let hasRelevantChange = false;
-        
+
         for (const mutation of mutations) {
             // Check if mutation is relevant to odds display
             const target = mutation.target;
-            
+
             // Check for Stake odds changes
             if (target.matches && (
                 target.matches('[data-testid="fixture-odds"]') ||
@@ -395,7 +626,7 @@ function startLiveMonitoring() {
                 hasRelevantChange = true;
                 break;
             }
-            
+
             // Check for Polymarket odds changes
             if (target.matches && (
                 target.matches('.trading-button') ||
@@ -406,7 +637,7 @@ function startLiveMonitoring() {
                 hasRelevantChange = true;
                 break;
             }
-            
+
             // Check text content changes for odds patterns
             if (mutation.type === 'characterData') {
                 const text = target.textContent || '';
@@ -416,7 +647,7 @@ function startLiveMonitoring() {
                     break;
                 }
             }
-            
+
             // Check added nodes for odds elements
             if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
                 for (const node of mutation.addedNodes) {
@@ -442,10 +673,10 @@ function startLiveMonitoring() {
                     }
                 }
             }
-            
+
             if (hasRelevantChange) break;
         }
-        
+
         if (hasRelevantChange) {
             scheduleUpdate();
         }
@@ -460,7 +691,7 @@ function startLiveMonitoring() {
         characterData: true,
         characterDataOldValue: false
     });
-    
+
     // Also set up a polling fallback for sites that update via Canvas/WebGL or complex frameworks
     // This runs every 2 seconds as a safety net, but only sends if data actually changed
     setInterval(() => {
@@ -507,37 +738,78 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     // ... highlight handler below ...
     if (request.action === "highlight_odds") {
-        const targets = request.targets || []; // Array of { team, type } 
+        const targets = request.targets || []; // Array of { team, type, color, index } 
         // type: 'polymarket' or 'stack'
 
         // Remove old highlights
-        document.querySelectorAll('.arb-highlight-box').forEach(el => el.classList.remove('arb-highlight-box'));
+        document.querySelectorAll('.arb-highlight-box').forEach(el => {
+            el.style.border = '';
+            el.style.position = '';
+            // Remove badge if exists
+            const badge = el.querySelector('.arb-badge');
+            if (badge) badge.remove();
+            el.classList.remove('arb-highlight-box');
+        });
 
         // Highlight new targets
         targets.forEach(tgt => {
+            const borderStyle = `5px solid ${tgt.color || '#e65100'}`;
+            const badgeHtml = tgt.index ? `<div class="arb-badge" style="position:absolute; top:-8px; left:-8px; background:${tgt.color || '#e65100'}; color:white; font-size:10px; font-weight:bold; padding:1px 5px; border-radius:10px; z-index:1000;">#${tgt.index}</div>` : '';
+
             // Logic to find and highlight in DOM
             if (tgt.type === 'stack') {
                 const stackItems = document.querySelectorAll('.outcome-content');
                 stackItems.forEach(item => {
-                    const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
-                    if (nameEl) {
-                        const teamName = nameEl.textContent.trim().toUpperCase();
-                        // Simple includes match
-                        if (teamName.includes(tgt.team) || tgt.team.includes(teamName)) {
-                            // Found it! Apply style to the BUTTON container group
-                            const container = item.closest('button');
-                            if (container) {
-                                container.setAttribute('style', 'background-color: #ffe0b2 !important; border: 2px solid #e65100 !important;');
-                            }
+                    let match = false;
+                    // 1. Try Link Match (Precise)
+                    if (tgt.link) {
+                        const linkEl = item.closest('a');
+                        if (linkEl && linkEl.href === tgt.link) match = true;
+                    }
+                    // 2. Fallback to Name Match
+                    if (!match) {
+                        const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
+                        if (nameEl) {
+                            const teamName = nameEl.textContent.trim().toUpperCase();
+                            if (teamName.includes(tgt.team) || tgt.team.includes(teamName)) match = true;
+                        }
+                    }
+
+                    if (match) {
+                        const container = item.closest('button');
+                        if (container) {
+                            container.classList.add('arb-highlight-box');
+                            container.style.border = borderStyle;
+                            container.style.position = 'relative';
+                            if (tgt.index) container.insertAdjacentHTML('beforeend', badgeHtml);
                         }
                     }
                 });
             } else if (tgt.type === 'polymarket') {
                 const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
                 polyButtons.forEach(btn => {
-                    const txt = btn.textContent.trim().toUpperCase();
-                    if (txt.includes(tgt.team)) {
-                        btn.setAttribute('style', 'background-color: #ffe0b2 !important; border: 2px solid #e65100 !important;');
+                    let match = false;
+                    // 1. Try Link Match (Precise)
+                    if (tgt.link) {
+                        const linkEl = btn.closest('a');
+                        if (linkEl && linkEl.href === tgt.link) match = true;
+                    }
+                    // 2. Fallback to Name Match
+                    if (!match) {
+                        const txt = btn.textContent.trim().toUpperCase();
+                        if (txt.includes(tgt.team)) match = true;
+                    }
+
+                    if (match) {
+                        // Use box-shadow for persistent visibility on complex buttons
+                        btn.classList.add('arb-highlight-box');
+                        btn.style.setProperty('border', borderStyle, 'important');
+                        btn.style.setProperty('box-shadow', `inset 0 0 0 4px ${tgt.color || '#e65100'}`, 'important');
+                        btn.style.position = 'relative';
+                        // Force overflow visible so badge can pop out
+                        btn.style.overflow = 'visible';
+                        btn.style.zIndex = '10';
+                        if (tgt.index) btn.insertAdjacentHTML('beforeend', badgeHtml);
                     }
                 });
             }
@@ -708,7 +980,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     setTimeout(() => {
                         // Check for minimum bet warning
                         checkMinBetWarning(targetTeam, amount, expectedOdds);
-                        
+
                         placeBtn.style.border = "4px solid #e91e63"; // Highlight "Place Bet"
                         // Send success message
                         chrome.runtime.sendMessage({ action: "bet_placed_success", team: targetTeam, amount: amount, odds: expectedOdds });
@@ -717,35 +989,35 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             };
             attempt(0);
         };
-        
+
         // Function to check for minimum bet warning on Stake
         const checkMinBetWarning = (team, amount, odds) => {
             setTimeout(() => {
                 // Look for the warning message
                 const warningEl = document.querySelector('.system-message.info, [class*="system-message"]');
                 const pageText = document.body.innerText;
-                
+
                 if (warningEl || pageText.includes('Minimum bet amount')) {
                     // Extract minimum amount if possible
                     const minMatch = pageText.match(/Minimum bet amount is[^\d]*([\d.,]+)/i);
                     const minAmount = minMatch ? minMatch[1] : 'unknown';
-                    
+
                     const message = `[WARNING] *Stake Minimum Bet Warning*\n\n` +
                         `Team: ${team}\n` +
                         `Entered: ${amount}\n` +
                         `Minimum Required: ₹${minAmount}\n` +
                         `Odds: ${odds}`;
-                    
+
                     // Send to background to forward to TG
-                    chrome.runtime.sendMessage({ 
-                        action: "stake_min_bet_warning", 
+                    chrome.runtime.sendMessage({
+                        action: "stake_min_bet_warning",
                         team: team,
                         enteredAmount: amount,
                         minAmount: minAmount,
                         odds: odds,
                         message: message
                     });
-                    
+
                     // Show alert popup
                     alert(`[WARNING] Stake Minimum Bet Warning!\n\nMinimum bet is ₹${minAmount}\nYou entered: ${amount}`);
                 }
@@ -767,7 +1039,7 @@ chrome.storage.local.get(['isEnabled', 'liveScanEnabled'], (result) => {
         setTimeout(runConverter, 1000);
         startObserver();
     }
-    
+
     // Auto-start live monitoring if enabled in settings
     if (result.liveScanEnabled === true) {
         console.log("[Content] Auto-starting live monitoring from saved setting");
@@ -1009,3 +1281,76 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
     }
 });
+if (request.action === "click_bet_button") {
+    const { id, team, amount, expectedOdds } = request;
+    console.log(`[Auto] Received click command for ${team} (ID: ${id})`);
+
+    // Helper to simulate React input change
+    const setNativeValue = (element, value) => {
+        const valueSetter = Object.getOwnPropertyDescriptor(element, 'value').set;
+        const prototype = Object.getPrototypeOf(element);
+        const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
+
+        if (valueSetter && valueSetter !== prototypeValueSetter) {
+            prototypeValueSetter.call(element, value);
+        } else {
+            valueSetter.call(element, value);
+        }
+        element.dispatchEvent(new Event('input', { bubbles: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+
+    const attemptFill = (retries = 10) => {
+        const input = document.getElementById('market-order-amount-input');
+        if (input) {
+            console.log("[Auto] Found amount input, filling:", amount);
+            input.focus();
+            setNativeValue(input, amount.toString());
+            input.blur(); // Trigger validation
+
+            // Check for errors after short delay
+            setTimeout(() => {
+                const errorMsg = document.querySelector('.text-orange-500, .text-red-500');
+                if (errorMsg && errorMsg.textContent.includes('greater than $1')) {
+                    console.warn("[Auto] Bet too small/error:", errorMsg.textContent);
+                    // Optional: Alert or feedback
+                }
+
+                // Verify Odds on page match expectation?
+                // We can check the buy button text or similar
+            }, 500);
+
+        } else if (retries > 0) {
+            setTimeout(() => attemptFill(retries - 1), 500);
+        } else {
+            console.warn("[Auto] Input field not found after retries.");
+        }
+    };
+
+    // 1. Find and Click Button
+    let btn = null;
+    if (id) btn = document.getElementById(id); // Best case
+
+    if (!btn) {
+        // Fallback to text matching
+        const buttons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+        for (const b of buttons) {
+            if (b.textContent.toUpperCase().includes(team.toUpperCase())) {
+                btn = b;
+                break;
+            }
+        }
+    }
+
+    if (btn) {
+        console.log("[Auto] Clicking button:", btn);
+        btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        btn.click();
+        // Start waiting for input
+        attemptFill();
+        sendResponse({ status: "clicked" });
+    } else {
+        console.error("[Auto] Button not found for:", team);
+        sendResponse({ status: "error", message: "Button not found" });
+    }
+}

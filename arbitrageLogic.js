@@ -139,6 +139,41 @@ class ArbitrageCalculator {
                 if (abbrevMatch(name2, name1)) return true;
             }
             
+            // 6. Handle prefix abbreviations (NEM = Nemesis, FORZER = FORZE)
+            // e.g., "NEM Team Nemesis" vs "Team Nemesis" or "FORZER FORZE Reload" vs "FORZE Reload"
+            const words1 = name1.toUpperCase().split(/\s+/).filter(w => w.length >= 2);
+            const words2 = name2.toUpperCase().split(/\s+/).filter(w => w.length >= 2);
+            
+            // Check if one name contains all words from the other (ignoring abbreviation prefix)
+            const containsAllWords = (longer, shorter) => {
+                if (shorter.length === 0) return false;
+                return shorter.every(word => 
+                    longer.some(w => w === word || w.includes(word) || word.includes(w))
+                );
+            };
+            
+            if (words1.length > words2.length && containsAllWords(words1, words2)) return true;
+            if (words2.length > words1.length && containsAllWords(words2, words1)) return true;
+            
+            // 7. Fuzzy prefix match - if one team name starts with abbreviation of the other
+            // e.g., "NEM" starts "NEMESIS", "FORZER" ~ "FORZE"
+            const fuzzyStartMatch = (short, long) => {
+                if (short.length < 3 || long.length < 3) return false;
+                // Check if short is prefix of long (with 1 char tolerance)
+                if (long.startsWith(short.slice(0, -1))) return true;
+                if (short.startsWith(long.slice(0, 3))) return true;
+                return false;
+            };
+            
+            // Compare significant tokens between names
+            for (const t1 of tokens1) {
+                if (commons.includes(t1)) continue;
+                for (const t2 of tokens2) {
+                    if (commons.includes(t2)) continue;
+                    if (fuzzyStartMatch(t1, t2) || fuzzyStartMatch(t2, t1)) return true;
+                }
+            }
+            
             return false;
         };
 

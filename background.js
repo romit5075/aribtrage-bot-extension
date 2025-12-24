@@ -137,23 +137,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         });
         return true;
     }
-    
+
     // Handle Stake Minimum Bet Warning - Send TG notification
     if (request.action === "stake_min_bet_warning") {
         chrome.storage.local.get(['tgBotToken', 'tgChatId'], (res) => {
             const token = res.tgBotToken;
             const chatId = res.tgChatId;
-            
+
             if (token && chatId) {
-                const message = request.message || 
+                const message = request.message ||
                     `[WARNING] *Stake Minimum Bet Warning*\n\n` +
                     `Team: ${request.team}\n` +
                     `Entered: ${request.enteredAmount}\n` +
                     `Minimum Required: ₹${request.minAmount}\n` +
                     `Odds: ${request.odds}`;
-                
+
                 const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(message)}&parse_mode=Markdown`;
-                
+
                 fetch(url)
                     .then(r => r.json())
                     .then(data => {
