@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -17,26 +18,26 @@
             --accent-purple: #a371f7;
             --border-color: #30363d;
         }
-        
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
             background: var(--bg-primary);
             color: var(--text-primary);
             min-height: 100vh;
         }
-        
+
         .container {
             max-width: 1400px;
             margin: 0 auto;
             padding: 20px;
         }
-        
+
         header {
             display: flex;
             justify-content: space-between;
@@ -45,22 +46,22 @@
             border-bottom: 1px solid var(--border-color);
             margin-bottom: 30px;
         }
-        
+
         .logo {
             display: flex;
             align-items: center;
             gap: 12px;
         }
-        
+
         .logo h1 {
             font-size: 24px;
             font-weight: 600;
         }
-        
+
         .logo span {
             color: var(--accent-green);
         }
-        
+
         .status {
             display: flex;
             align-items: center;
@@ -70,7 +71,7 @@
             border-radius: 20px;
             font-size: 14px;
         }
-        
+
         .status-dot {
             width: 8px;
             height: 8px;
@@ -78,23 +79,30 @@
             background: var(--accent-green);
             animation: pulse 2s infinite;
         }
-        
+
         .status-dot.disconnected {
             background: var(--accent-orange);
             animation: none;
         }
-        
+
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
         }
-        
+
         .controls {
             display: flex;
             gap: 12px;
             margin-bottom: 24px;
         }
-        
+
         .btn {
             padding: 10px 20px;
             border: none;
@@ -104,26 +112,26 @@
             cursor: pointer;
             transition: all 0.2s;
         }
-        
+
         .btn-primary {
             background: var(--accent-green);
             color: var(--bg-primary);
         }
-        
+
         .btn-primary:hover {
             background: #00c853;
         }
-        
+
         .btn-secondary {
             background: var(--bg-card);
             color: var(--text-primary);
             border: 1px solid var(--border-color);
         }
-        
+
         .btn-secondary:hover {
             background: var(--bg-secondary);
         }
-        
+
         .search-box {
             flex: 1;
             padding: 10px 16px;
@@ -133,18 +141,18 @@
             color: var(--text-primary);
             font-size: 14px;
         }
-        
+
         .search-box:focus {
             outline: none;
             border-color: var(--accent-blue);
         }
-        
+
         .markets-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(400px, 1fr));
             gap: 20px;
         }
-        
+
         .market-card {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
@@ -152,24 +160,24 @@
             padding: 20px;
             transition: all 0.2s;
         }
-        
+
         .market-card:hover {
             border-color: var(--accent-blue);
             transform: translateY(-2px);
         }
-        
+
         .market-card.tracked {
             border-color: var(--accent-green);
             box-shadow: 0 0 20px rgba(0, 230, 118, 0.1);
         }
-        
+
         .market-header {
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
             margin-bottom: 16px;
         }
-        
+
         .market-question {
             font-size: 16px;
             font-weight: 600;
@@ -177,14 +185,14 @@
             flex: 1;
             margin-right: 12px;
         }
-        
+
         .market-tags {
             display: flex;
             flex-wrap: wrap;
             gap: 6px;
             margin-bottom: 16px;
         }
-        
+
         .tag {
             padding: 4px 10px;
             background: var(--bg-secondary);
@@ -193,18 +201,18 @@
             color: var(--text-secondary);
             text-transform: uppercase;
         }
-        
+
         .tag.sports {
             background: rgba(0, 230, 118, 0.1);
             color: var(--accent-green);
         }
-        
+
         .outcomes {
             display: flex;
             flex-direction: column;
             gap: 10px;
         }
-        
+
         .outcome {
             display: flex;
             justify-content: space-between;
@@ -216,27 +224,27 @@
             cursor: pointer;
             transition: all 0.2s;
         }
-        
+
         .outcome:hover {
             border-color: var(--accent-blue);
         }
-        
+
         .outcome-name {
             font-weight: 500;
             font-size: 14px;
         }
-        
+
         .outcome-odds {
             display: flex;
             align-items: center;
             gap: 16px;
         }
-        
+
         .probability {
             font-size: 14px;
             color: var(--text-secondary);
         }
-        
+
         .decimal-odds {
             font-size: 18px;
             font-weight: 700;
@@ -244,16 +252,23 @@
             min-width: 60px;
             text-align: right;
         }
-        
+
         .decimal-odds.updating {
             animation: flash 0.3s;
         }
-        
+
         @keyframes flash {
-            0%, 100% { color: var(--accent-green); }
-            50% { color: var(--accent-orange); }
+
+            0%,
+            100% {
+                color: var(--accent-green);
+            }
+
+            50% {
+                color: var(--accent-orange);
+            }
         }
-        
+
         .market-footer {
             display: flex;
             justify-content: space-between;
@@ -262,42 +277,42 @@
             padding-top: 16px;
             border-top: 1px solid var(--border-color);
         }
-        
+
         .market-stats {
             display: flex;
             gap: 20px;
             font-size: 12px;
             color: var(--text-secondary);
         }
-        
+
         .stat {
             display: flex;
             align-items: center;
             gap: 4px;
         }
-        
+
         .stat-value {
             color: var(--text-primary);
             font-weight: 500;
         }
-        
+
         .track-btn {
             padding: 6px 14px;
             font-size: 12px;
             border-radius: 6px;
         }
-        
+
         .track-btn.tracking {
             background: var(--accent-green);
             color: var(--bg-primary);
         }
-        
+
         .loading {
             text-align: center;
             padding: 60px 20px;
             color: var(--text-secondary);
         }
-        
+
         .loading-spinner {
             width: 40px;
             height: 40px;
@@ -307,17 +322,19 @@
             margin: 0 auto 16px;
             animation: spin 1s linear infinite;
         }
-        
+
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to {
+                transform: rotate(360deg);
+            }
         }
-        
+
         .empty-state {
             text-align: center;
             padding: 60px 20px;
             color: var(--text-secondary);
         }
-        
+
         .live-badge {
             display: inline-flex;
             align-items: center;
@@ -330,7 +347,7 @@
             font-weight: 600;
             text-transform: uppercase;
         }
-        
+
         .live-badge::before {
             content: '';
             width: 6px;
@@ -339,7 +356,7 @@
             border-radius: 50%;
             animation: pulse 1s infinite;
         }
-        
+
         /* Toast notifications */
         .toast-container {
             position: fixed;
@@ -347,7 +364,7 @@
             right: 20px;
             z-index: 1000;
         }
-        
+
         .toast {
             padding: 12px 20px;
             background: var(--bg-card);
@@ -356,26 +373,88 @@
             margin-top: 10px;
             animation: slideIn 0.3s;
         }
-        
+
         @keyframes slideIn {
             from {
                 transform: translateX(100%);
                 opacity: 0;
             }
+
             to {
                 transform: translateX(0);
                 opacity: 1;
             }
         }
+
+        /* Orderbook Styles */
+        .orderbook-container {
+            margin-top: 12px;
+            background: var(--bg-primary);
+            border-radius: 8px;
+            padding: 12px;
+            display: none;
+        }
+
+        .orderbook-container.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+
+        .orderbook-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        .orderbook-side h4 {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .orderbook-table {
+            width: 100%;
+            font-size: 12px;
+            border-collapse: collapse;
+        }
+
+        .orderbook-table th {
+            text-align: left;
+            padding: 4px;
+            color: var(--text-secondary);
+            font-weight: 400;
+        }
+
+        .orderbook-table td {
+            padding: 4px;
+            font-family: monospace;
+        }
+
+        .text-green {
+            color: var(--accent-green);
+        }
+
+        .text-red {
+            color: var(--accent-orange);
+        }
+
+        .orderbook-row:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
         <header>
             <div class="logo">
                 <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-                    <circle cx="16" cy="16" r="14" stroke="#00e676" stroke-width="2"/>
-                    <path d="M10 16L14 20L22 12" stroke="#00e676" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    <circle cx="16" cy="16" r="14" stroke="#00e676" stroke-width="2" />
+                    <path d="M10 16L14 20L22 12" stroke="#00e676" stroke-width="2" stroke-linecap="round"
+                        stroke-linejoin="round" />
                 </svg>
                 <h1>Polymarket <span>Sports Odds</span></h1>
             </div>
@@ -384,13 +463,14 @@
                 <span id="status-text">Connecting...</span>
             </div>
         </header>
-        
+
         <div class="controls">
-            <input type="text" class="search-box" id="search-input" placeholder="Search markets (e.g., Liverpool, Lakers, Chiefs...)">
+            <input type="text" class="search-box" id="search-input"
+                placeholder="Search markets (e.g., Liverpool, Lakers, Chiefs...)">
             <button class="btn btn-primary" id="refresh-btn">🔄 Refresh</button>
             <button class="btn btn-secondary" id="filter-tracked-btn">📌 Tracked Only</button>
         </div>
-        
+
         <div id="markets-container">
             <div class="loading">
                 <div class="loading-spinner"></div>
@@ -398,16 +478,16 @@
             </div>
         </div>
     </div>
-    
+
     <div class="toast-container" id="toast-container"></div>
-    
+
     <script>
         // State
         let markets = [];
         let trackedMarkets = new Set();
         let ws = null;
         let showTrackedOnly = false;
-        
+
         // DOM elements
         const marketsContainer = document.getElementById('markets-container');
         const searchInput = document.getElementById('search-input');
@@ -416,35 +496,35 @@
         const statusDot = document.getElementById('status-dot');
         const statusText = document.getElementById('status-text');
         const toastContainer = document.getElementById('toast-container');
-        
+
         // Initialize WebSocket
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-            
+
             ws.onopen = () => {
                 statusDot.classList.remove('disconnected');
                 statusText.textContent = 'Live';
                 showToast('Connected to live updates');
             };
-            
+
             ws.onclose = () => {
                 statusDot.classList.add('disconnected');
                 statusText.textContent = 'Disconnected';
                 // Reconnect after 3 seconds
                 setTimeout(connectWebSocket, 3000);
             };
-            
+
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 handleWebSocketMessage(data);
             };
-            
+
             ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
             };
         }
-        
+
         // Handle WebSocket messages
         function handleWebSocketMessage(data) {
             if (data.type === 'price_update') {
@@ -453,31 +533,31 @@
                 showToast(`Now tracking: ${data.market_id.substring(0, 20)}...`);
             }
         }
-        
+
         // Update market prices in UI
         function updateMarketPrices(update) {
             const { market_id, prices } = update;
-            
+
             for (const [outcome, priceData] of Object.entries(prices)) {
                 const oddsEl = document.querySelector(`[data-market="${market_id}"][data-outcome="${outcome}"] .decimal-odds`);
                 if (oddsEl && priceData.decimal_odds) {
                     const oldValue = oddsEl.textContent;
                     const newValue = priceData.decimal_odds.toFixed(2);
-                    
+
                     if (oldValue !== newValue) {
                         oddsEl.textContent = newValue;
                         oddsEl.classList.add('updating');
                         setTimeout(() => oddsEl.classList.remove('updating'), 300);
                     }
                 }
-                
+
                 const probEl = document.querySelector(`[data-market="${market_id}"][data-outcome="${outcome}"] .probability`);
                 if (probEl && priceData.probability) {
                     probEl.textContent = `${(priceData.probability * 100).toFixed(1)}%`;
                 }
             }
         }
-        
+
         // Fetch markets
         async function fetchMarkets() {
             marketsContainer.innerHTML = `
@@ -486,7 +566,7 @@
                     <p>Loading sports markets...</p>
                 </div>
             `;
-            
+
             try {
                 const response = await fetch('/api/markets/sports');
                 const data = await response.json();
@@ -501,22 +581,22 @@
                 `;
             }
         }
-        
+
         // Render markets
         function renderMarkets() {
             const searchTerm = searchInput.value.toLowerCase();
-            
+
             let filteredMarkets = markets.filter(market => {
-                const matchesSearch = !searchTerm || 
+                const matchesSearch = !searchTerm ||
                     market.question.toLowerCase().includes(searchTerm) ||
                     (market.description && market.description.toLowerCase().includes(searchTerm)) ||
                     market.tags.some(tag => tag.toLowerCase().includes(searchTerm));
-                
+
                 const matchesTracked = !showTrackedOnly || trackedMarkets.has(market.id);
-                
+
                 return matchesSearch && matchesTracked;
             });
-            
+
             if (filteredMarkets.length === 0) {
                 marketsContainer.innerHTML = `
                     <div class="empty-state">
@@ -525,13 +605,13 @@
                 `;
                 return;
             }
-            
+
             marketsContainer.innerHTML = `
                 <div class="markets-grid">
                     ${filteredMarkets.map(market => renderMarketCard(market)).join('')}
                 </div>
             `;
-            
+
             // Add event listeners
             document.querySelectorAll('.track-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
@@ -540,32 +620,37 @@
                 });
             });
         }
-        
+
         // Render single market card
         function renderMarketCard(market) {
             const isTracked = trackedMarkets.has(market.id);
-            
+
             const outcomesHtml = market.outcomes.map(outcome => {
                 const prob = outcome.price ? (outcome.price * 100).toFixed(1) : '—';
                 const odds = outcome.price && outcome.price > 0 ? (1 / outcome.price).toFixed(2) : '—';
-                
+
                 return `
-                    <div class="outcome" data-market="${market.id}" data-outcome="${outcome.name}">
-                        <span class="outcome-name">${outcome.name}</span>
-                        <div class="outcome-odds">
-                            <span class="probability">${prob}%</span>
-                            <span class="decimal-odds">${odds}</span>
+                    <div class="outcome-wrapper">
+                        <div class="outcome" onclick="toggleOrderbook(this, '${outcome.token_id}')">
+                            <span class="outcome-name">${outcome.name}</span>
+                            <div class="outcome-odds">
+                                <span class="probability">${prob}%</span>
+                                <span class="decimal-odds">${odds}</span>
+                            </div>
+                        </div>
+                        <div class="orderbook-container" id="ob-${outcome.token_id}">
+                            <div class="loading-spinner" style="width: 20px; height: 20px;"></div>
                         </div>
                     </div>
                 `;
             }).join('');
-            
-            const tagsHtml = market.tags.slice(0, 3).map(tag => 
+
+            const tagsHtml = market.tags.slice(0, 3).map(tag =>
                 `<span class="tag ${tag.toLowerCase() === 'sports' ? 'sports' : ''}">${tag}</span>`
             ).join('');
-            
+
             const volume = market.volume ? `$${(market.volume / 1000000).toFixed(2)}M` : '—';
-            
+
             return `
                 <div class="market-card ${isTracked ? 'tracked' : ''}" data-market-id="${market.id}">
                     <div class="market-header">
@@ -586,7 +671,66 @@
                 </div>
             `;
         }
-        
+
+        // Toggle Orderbook
+        async function toggleOrderbook(element, tokenId) {
+            if (!tokenId) return;
+            const container = document.getElementById(`ob-${tokenId}`);
+
+            if (container.classList.contains('active')) {
+                container.classList.remove('active');
+                return;
+            }
+
+            // Close others in same card
+            const parentCard = element.closest('.market-card');
+            parentCard.querySelectorAll('.orderbook-container').forEach(el => el.classList.remove('active'));
+
+            container.classList.add('active');
+
+            try {
+                const response = await fetch(`/api/orderbook/${tokenId}`);
+                const data = await response.json();
+
+                renderOrderbook(container, data);
+            } catch (error) {
+                container.innerHTML = '<p style="font-size: 12px; color: var(--accent-orange)">Failed to load orderbook</p>';
+                console.error(error);
+            }
+        }
+
+        function renderOrderbook(container, data) {
+            const bids = data.bids.slice(0, 5); // Top 5
+            const asks = data.asks.slice(0, 5); // Top 5
+
+            const renderRows = (items, type) => {
+                if (!items.length) return '<tr><td colspan="2" style="text-align:center; color: var(--text-secondary)">-</td></tr>';
+                return items.map(item => `
+                    <tr class="orderbook-row">
+                        <td class="text-${type === 'bid' ? 'green' : 'red'}">${item.price}</td>
+                        <td style="text-align: right;">${parseFloat(item.size).toFixed(2)}</td>
+                    </tr>
+                `).join('');
+            };
+
+            container.innerHTML = `
+                <div class="orderbook-grid">
+                    <div class="orderbook-side">
+                        <h4>Bids (Buy) <span>Size</span></h4>
+                        <table class="orderbook-table">
+                            <tbody>${renderRows(bids, 'bid')}</tbody>
+                        </table>
+                    </div>
+                    <div class="orderbook-side">
+                        <h4>Asks (Sell) <span>Size</span></h4>
+                        <table class="orderbook-table">
+                            <tbody>${renderRows(asks, 'ask')}</tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+        }
+
         // Toggle market tracking
         async function toggleTrack(marketId) {
             if (trackedMarkets.has(marketId)) {
@@ -604,40 +748,41 @@
             }
             renderMarkets();
         }
-        
+
         // Show toast notification
         function showToast(message) {
             const toast = document.createElement('div');
             toast.className = 'toast';
             toast.textContent = message;
             toastContainer.appendChild(toast);
-            
+
             setTimeout(() => {
                 toast.remove();
             }, 3000);
         }
-        
+
         // Event listeners
         searchInput.addEventListener('input', () => {
             renderMarkets();
         });
-        
+
         refreshBtn.addEventListener('click', () => {
             fetchMarkets();
         });
-        
+
         filterTrackedBtn.addEventListener('click', () => {
             showTrackedOnly = !showTrackedOnly;
             filterTrackedBtn.textContent = showTrackedOnly ? '📍 Show All' : '📌 Tracked Only';
             renderMarkets();
         });
-        
+
         // Initialize
         connectWebSocket();
         fetchMarkets();
-        
+
         // Auto-refresh every 30 seconds
         setInterval(fetchMarkets, 30000);
     </script>
 </body>
+
 </html>

@@ -238,6 +238,15 @@ async def get_market_prices(market_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/orderbook/{token_id}")
+async def get_orderbook(token_id: str):
+    """Get orderbook (bids/asks) for a token"""
+    try:
+        orderbook = await polymarket_client.get_market_orderbook(token_id)
+        return orderbook
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/api/track/{market_id}")
 async def track_market(market_id: str):

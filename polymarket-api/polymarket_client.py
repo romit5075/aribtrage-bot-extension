@@ -9,11 +9,27 @@ from config import config
 import json
 
 
+from py_clob_client.client import ClobClient
+from py_clob_client.constants import POLYGON
+
 class PolymarketClient:
     def __init__(self):
         self.gamma_api = config.GAMMA_API_URL
         self.clob_api = config.POLYMARKET_HOST
         self.http_client = None
+        self.clob_client = None
+        
+    def _get_clob_client(self) -> ClobClient:
+        if not self.clob_client:
+            try:
+                self.clob_client = ClobClient(
+                    host=self.clob_api,
+                    key=config.POLYMARKET_PRIVATE_KEY if config.POLYMARKET_PRIVATE_KEY else None,
+                    chain_id=config.CHAIN_ID
+                )
+            except Exception as e:
+                print(f"Failed to init ClobClient: {e}")
+        return self.clob_client
     
     async def _get_client(self) -> httpx.AsyncClient:
         if self.http_client is None:
@@ -100,7 +116,24 @@ class PolymarketClient:
             return None
     
     async def get_market_orderbook(self, token_id: str) -> Dict:
-        """Fetch orderbook for a specific token"""
+        """Fetch orderbook for a specific token using ClobClient"""
+        try:
+            client = self._get_clob_client()
+            if client:
+                # ClobClient relies on sync requests in the current version or we wrap it
+                # The library doesn't seem to be async native for requests, so we might block slightly 
+                # or we should run it in an executor if high traffic. 
+                # For now direct call:
+                book = client.get_order_book(token_id)
+                # book usually returns an object with bids/asks
+                return {
+                    "bids": [{"price": b.price, "size": b.size} for b in book.bids],
+                    "asks": [{"price": a.price, "size": a.size} for a in book.asks]
+                }
+        except Exception as e:
+            print(f"Error fetching orderbook via CLOB: {e}")
+        
+        # Fallback to direct HTTP if CLOB library fails
         client = await self._get_client()
         try:
             response = await client.get(
