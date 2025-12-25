@@ -61,73 +61,74 @@ class PolymarketClient:
             return []
     
     async def get_sports_markets(self, limit: int = 20, offset: int = 0) -> Dict:
-        """Fetch sports-related markets with pagination"""
-        # We need to fetch more from source to ensure we have enough after filtering
-        # This is a bit inefficient without server-side tag filtering, but works for now.
-        # Efficient way: Use specific tag IDs if known.
+        """Fetch sports-related markets using tag slugs"""
+        client = await self._get_client()
         
-        # known sports tag IDs (approximate, found via manual exploration often needed)
-        # For now, let's try to fetch a larger batch from offset and filter.
+        # Priority sports slugs to fetch
+        # We rotate or fetch all. For pagination simplicity in this demo,
+        # we will fetch 'sports' tag + specific high volume ones if 'sports' is empty.
+        # Actually, let's just fetch 'sports' tag first, it usually aggregates them.
+        # If that fails, we fallback to specific leagues.
         
-        fetch_limit = 100  # Fetch more to filter down
-        fetch_offset = offset
+        target_slugs = ["sports", "nba", "nfl", "soccer", "tennis", "ufc-mma"]
         
         found_markets = []
         
-        # Keep fetching until we satisfy the limit or run out
-        while len(found_markets) < limit:
-            markets = await self.get_all_markets(limit=fetch_limit, offset=fetch_offset)
-            if not markets:
-                break
+        # We will use the 'offset' effectively as a page number for the API if possible, 
+        # or just fetch a large batch. Gamma API supports offset/limit.
+        
+        try:
+            # We'll prioritize the generic 'sports' tag which covers most.
+            # If the user specifically wants different sports, we'd need a more complex UI filter.
+            # For now, fetching "sports" tag_slug is the best broad approach.
+            
+            # Note: Gamma API offset is record-based.
+            response = await client.get(
+                f"{self.gamma_api}/events",
+                params={
+                    "limit": limit,
+                    "offset": offset,
+                    "tag_slug": "sports",
+                    "active": "true",
+                    "closed": "false"
+                }
+            )
+            
+            if response.status_code == 200:
+                events = response.json()
                 
-            for market in markets:
-                # Basic validation
-                if not market.get("question"):
-                    continue
+                # If 'sports' tag is empty (sometimes happens), try 'nba' as fallback for demo
+                if not events and offset == 0:
+                     response = await client.get(
+                        f"{self.gamma_api}/events",
+                        params={"limit": limit, "tag_slug": "nba", "active": "true"}
+                    )
+                     events = response.json() if response.status_code == 200 else []
+
+                # Flatten events into markets
+                # Events usually contain multiple markets. We want the main ones (Winner, etc).
+                for event in events:
+                    event_markets = event.get("markets", [])
+                    event_title = event.get("title", "")
+                    event_img = event.get("image", "")
                     
-                title = market.get("question", "").lower()
-                description = market.get("description", "").lower()
-                # Safe access to tags which might be None
-                tags_list = market.get("tags") or []
-                tags = [str(t).lower() for t in tags_list]
-                
-                is_sports = False
-                
-                # Check tags
-                sports_tags = ["sports", "nba", "nfl", "soccer", "football", "hockey", "baseball", "tennis", "ufc", "mma", "cricket"]
-                if any(tag in sports_tags for tag in tags):
-                    is_sports = True
-                
-                # Check keywords
-                if not is_sports:
-                    combined_text = f"{title} {description}"
-                    for keyword in config.SPORTS_KEYWORDS:
-                        if keyword in combined_text:
-                            is_sports = True
-                            break
-                
-                if is_sports:
-                    found_markets.append(market)
+                    for market in event_markets:
+                        # Enrich market with event metadata if missing
+                        if not market.get("image"):
+                            market["image"] = event_img
+                            
+                        # Add to list
+                        found_markets.append(market)
+                        
+            # Normalize list length to limit
+            return {
+                "markets": found_markets[:limit],
+                "next_offset": offset + limit if found_markets else None
+            }
             
-            fetch_offset += fetch_limit
-            
-            # Circuit breaker to prevent infinite loops if few sports markets exist
-            if fetch_offset > offset + 500: 
-                break
-        
-        # Slice to requested page
-        # Since we are scanning linearly, the 'offset' argument to THIS function
-        # implies "skip X sports markets".
-        # This implementation is complex because 100 raw markets != 100 sports markets.
-        # SIMPLIFICATION:
-        # We will just scan 'active' markets from the API.
-        
-        # improved logic: just return what we found in this scan batch
-        # A true database would be better, but for stateless API:
-        return {
-            "markets": found_markets[:limit],
-            "next_offset": fetch_offset if len(found_markets) >= limit else None
-        }
+        except Exception as e:
+            print(f"Error fetching sports markets: {e}")
+            return {"markets": [], "next_offset": None}
         
         # Filter for sports markets
         sports_markets = []
