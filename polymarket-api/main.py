@@ -128,10 +128,13 @@ async def health_check():
 
 
 @app.get("/api/markets/sports")
-async def get_sports_markets():
-    """Get all sports-related markets"""
+async def get_sports_markets(limit: int = 20, cursor: int = 0):
+    """Get sports-related markets with pagination"""
     try:
-        markets = await polymarket_client.get_sports_markets()
+        # Use cursor as offset
+        result = await polymarket_client.get_sports_markets(limit=limit, offset=cursor)
+        markets = result["markets"]
+        next_cursor = result["next_offset"]
         
         # Format response
         formatted_markets = []
@@ -158,12 +161,9 @@ async def get_sports_markets():
                 "image": market.get("image")
             })
         
-        # Update cache
-        markets_cache["sports_markets"] = formatted_markets
-        markets_cache["last_updated"] = datetime.utcnow().isoformat()
-        
         return {
             "count": len(formatted_markets),
+            "next_cursor": next_cursor,
             "markets": formatted_markets
         }
     

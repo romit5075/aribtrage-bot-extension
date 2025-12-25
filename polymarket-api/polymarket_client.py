@@ -60,21 +60,74 @@ class PolymarketClient:
             print(f"Error fetching markets: {e}")
             return []
     
-    async def get_sports_markets(self) -> List[Dict]:
-        """Fetch only sports-related markets"""
-        all_markets = []
-        offset = 0
-        limit = 100
+    async def get_sports_markets(self, limit: int = 20, offset: int = 0) -> Dict:
+        """Fetch sports-related markets with pagination"""
+        # We need to fetch more from source to ensure we have enough after filtering
+        # This is a bit inefficient without server-side tag filtering, but works for now.
+        # Efficient way: Use specific tag IDs if known.
         
-        # Fetch multiple pages
-        for _ in range(5):  # Max 500 markets
-            markets = await self.get_all_markets(limit=limit, offset=offset)
+        # known sports tag IDs (approximate, found via manual exploration often needed)
+        # For now, let's try to fetch a larger batch from offset and filter.
+        
+        fetch_limit = 100  # Fetch more to filter down
+        fetch_offset = offset
+        
+        found_markets = []
+        
+        # Keep fetching until we satisfy the limit or run out
+        while len(found_markets) < limit:
+            markets = await self.get_all_markets(limit=fetch_limit, offset=fetch_offset)
             if not markets:
                 break
-            all_markets.extend(markets)
-            offset += limit
-            if len(markets) < limit:
+                
+            for market in markets:
+                # Basic validation
+                if not market.get("question"):
+                    continue
+                    
+                title = market.get("question", "").lower()
+                description = market.get("description", "").lower()
+                # Safe access to tags which might be None
+                tags_list = market.get("tags") or []
+                tags = [str(t).lower() for t in tags_list]
+                
+                is_sports = False
+                
+                # Check tags
+                sports_tags = ["sports", "nba", "nfl", "soccer", "football", "hockey", "baseball", "tennis", "ufc", "mma", "cricket"]
+                if any(tag in sports_tags for tag in tags):
+                    is_sports = True
+                
+                # Check keywords
+                if not is_sports:
+                    combined_text = f"{title} {description}"
+                    for keyword in config.SPORTS_KEYWORDS:
+                        if keyword in combined_text:
+                            is_sports = True
+                            break
+                
+                if is_sports:
+                    found_markets.append(market)
+            
+            fetch_offset += fetch_limit
+            
+            # Circuit breaker to prevent infinite loops if few sports markets exist
+            if fetch_offset > offset + 500: 
                 break
+        
+        # Slice to requested page
+        # Since we are scanning linearly, the 'offset' argument to THIS function
+        # implies "skip X sports markets".
+        # This implementation is complex because 100 raw markets != 100 sports markets.
+        # SIMPLIFICATION:
+        # We will just scan 'active' markets from the API.
+        
+        # improved logic: just return what we found in this scan batch
+        # A true database would be better, but for stateless API:
+        return {
+            "markets": found_markets[:limit],
+            "next_offset": fetch_offset if len(found_markets) >= limit else None
+        }
         
         # Filter for sports markets
         sports_markets = []
