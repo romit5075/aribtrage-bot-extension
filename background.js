@@ -94,267 +94,67 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const { url, team, id } = request;
 
         // Helper to trigger click with retry
-        const triggerClick = (tabId, retries = 3, finalAmount) => {
-            const targetTeam = team;
-            const targetId = id;
+        const triggerClick = (tabId, retries = 3) => {
+            const amount = request.amount;
+            const expectedOdds = request.expectedOdds;
+            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id, amount: amount, expectedOdds: expectedOdds }, (response) => {
+                const err = chrome.runtime.lastError;
+                if (err) {
+                    // Ignore "port closed" error as it usually means listener existed but closed (success-ish)
+                    // But if we want to be strict, we only retry on meaningful connection errors
+                    console.log("Msg error:", err.message);
 
-            chrome.scripting.executeScript({
-                target: { tabId: tabId },
-                func: (teamName, btnId, stakeAmt) => {
-                    console.log(`[Auto-Bet] Starting execution for ${teamName} ($${stakeAmt})`);
-
-                    // 1. Helper: Robust Input Filler (Simulate Typing)
-                    const simulateUserTyping = (element, value) => {
-                        element.focus();
-                        element.select();
-                        if (!document.execCommand('insertText', false, value)) {
-                            // Fallback to React setter if execCommand fails
-                            const valueSetter = Object.getOwnPropertyDescriptor(element, 'value').set;
-                            const prototype = Object.getPrototypeOf(element);
-                            const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
-
-                            if (valueSetter && valueSetter !== prototypeValueSetter) {
-                                prototypeValueSetter.call(element, value);
-                            } else {
-                                valueSetter.call(element, value);
-                            }
-                            element.dispatchEvent(new Event('input', { bubbles: true }));
-                            element.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    };
-
-                    // 2. Logic: Process Bet Slip (Poll for Input -> Fill -> Poll for Place Bet -> Click)
-                    const processBetSlip = (retries = 50) => { // 5s timeout
-                        // A. Find Input
-                        let input = document.getElementById('market-order-amount-input');
-                        if (!input) input = document.querySelector('input[data-testid="input-bet-amount"]');
-                        if (!input) input = document.querySelector('input[placeholder="Enter Stake"]');
-
-                        if (input) {
-                            // B. Fill Input Strategy
-                            const fillInput = (fillRetries = 50) => {
-                                // Re-fetch input to be safe
-                                let freshInput = document.getElementById('market-order-amount-input');
-                                if (!freshInput) freshInput = document.querySelector('input[data-testid="input-bet-amount"]');
-                                if (!freshInput) freshInput = document.querySelector('input[placeholder="Enter Stake"]');
-                                // New Fallback: Look inside the specific svelte classes provided
-                                if (!freshInput) freshInput = document.querySelector('.input-content input');
-                                if (!freshInput) freshInput = document.querySelector('input[type="number"][step="1e-8"]');
-
-                                if (freshInput) {
-                                    // Ensure we are interacting with the layout
-                                    if (fillRetries % 5 === 0) freshInput.click();
-
-                                    if (freshInput.value !== stakeAmt.toString()) {
-                                        console.log(`[Auto-Bet] Persistence Check: Typing ${stakeAmt}...`);
-
-                                        // 1. Force Reset (Clear) first
-                                        if (fillRetries % 3 === 0) {
-                                            freshInput.value = '';
-                                            freshInput.dispatchEvent(new Event('input', { bubbles: true }));
-                                        }
-
-                                        // 2. Type New Value
-                                        simulateUserTyping(freshInput, stakeAmt.toString());
-
-                                        // Retry if not set
-                                        setTimeout(() => {
-                                            if (freshInput.value !== stakeAmt.toString() && fillRetries > 0) {
-                                                fillInput(fillRetries - 1);
-                                            }
-                                        }, 100);
-                                    } else {
-                                        console.log("[Auto-Bet] Input filled correctly.");
-                                    }
-                                }
-                            };
-
-                            // Start persistent fill
-                            fillInput();
-
-                            // C. Find & Click "Place Bet"
-                            // Wait for the button to become enabled
-                            const findAndPlace = (btnRetries = 20) => {
-                                // Stake Specific: data-testid="betSlip-place-bets-button"
-                                // Also "Place Bet" text check just in case
-                                let placeBtn = document.querySelector('button[data-testid="betSlip-place-bets-button"]');
-
-                                if (placeBtn) {
-                                    if (!placeBtn.disabled && !placeBtn.hasAttribute('disabled')) {
-                                        console.log("[Auto-Bet] Place Bet button enabled. Clicking!");
-                                        placeBtn.click();
-                                        // Optional: Send success update to BG?
-                                    } else {
-                                        // Button found but disabled
-                                        if (btnRetries > 0) {
-                                            // Maybe verify input value persisted?
-                                            if (input.value !== stakeAmt.toString()) {
-                                                console.log("[Auto-Bet] Input value lost? Refilling...");
-                                                setNativeValue(input, stakeAmt.toString());
-                                            }
-                                            setTimeout(() => findAndPlace(btnRetries - 1), 100);
-                                        } else {
-                                            console.warn("[Auto-Bet] Place button stuck disabled.");
-                                        }
-                                    }
-                                } else {
-                                    // Button not found yet
-                                    if (btnRetries > 0) {
-                                        setTimeout(() => findAndPlace(btnRetries - 1), 100);
-                                    }
-                                }
-                            };
-
-                            // Give React a moment to register value
-                            setTimeout(() => findAndPlace(), 200);
-
-                        } else {
-                            // Input not found
-                            if (retries > 0) {
-                                setTimeout(() => processBetSlip(retries - 1), 100); // 100ms
-                            } else {
-                                console.warn("[Auto-Bet] Input field never appeared.");
-                            }
-                        }
-                    };
-
-                    // 3. Logic: Conditional Clear -> Click -> processBetSlip
-                    const performBet = async () => {
-                        // A. Check Badge Count
-                        const badge = document.getElementById('bet-slip-count-badge');
-                        let count = 0;
-                        if (badge) count = parseInt(badge.textContent.trim()) || 0;
-
-                        // B. Clear if needed
-                        if (count >= 1) {
-                            const clearBtn = document.querySelector('button[data-testid="reset-betslip"]');
-                            if (clearBtn) {
-                                console.log(`[Auto-Bet] Slip has ${count} items. Clearing...`);
-                                clearBtn.click();
-                                await new Promise(r => setTimeout(r, 300));
-                            }
-                        } else {
-                            console.log("[Auto-Bet] Slip is empty. No clear needed.");
-                        }
-
-                        // C. Find Button Rule
-                        let btn = null;
-                        if (btnId) btn = document.getElementById(btnId);
-
-                        if (!btn) {
-                            // Stake/SX
-                            const stakeBtn = document.querySelector(`button[aria-label="${teamName}"], button[aria-label="${teamName} "]`);
-                            if (stakeBtn) {
-                                btn = stakeBtn;
-                            } else {
-                                // Fallback
-                                const candidates = document.querySelectorAll('button.trading-button, button[class*="trading-button"], button[data-testid="fixture-outcome"], button.outcome');
-                                for (const b of candidates) {
-                                    if (b.textContent.trim().toUpperCase() === teamName.toUpperCase()) {
-                                        btn = b;
-                                        break;
-                                    }
-                                }
-                                if (!btn) {
-                                    for (const b of candidates) {
-                                        const nameSpan = b.querySelector('[data-testid="outcome-button-name"]');
-                                        const textToCheck = nameSpan ? nameSpan.textContent : b.textContent;
-                                        if (textToCheck.toUpperCase().includes(teamName.toUpperCase())) {
-                                            btn = b;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // D. Click
-                        if (btn) {
-                            console.log("[Auto-Bet] Button found:", btn);
-                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            const originalBorder = btn.style.border;
-                            btn.style.border = "4px solid #00ff00";
-
-                            setTimeout(() => {
-                                btn.click();
-                                btn.style.border = originalBorder;
-                                console.log("[Auto-Bet] Clicked button. Waiting for input.");
-                                // E. Start Waiting for Input
-                                processBetSlip();
-                            }, 300);
-                            return { success: true };
-                        } else {
-                            console.error("[Auto-Bet] Button not found for " + teamName);
-                            return { success: false, error: "Button not found", team: teamName };
-                        }
-                    };
-
-                    performBet();
-                },
-                args: [targetTeam, targetId, finalAmount]
-            }, (results) => {
-                if (chrome.runtime.lastError) {
-                    console.error("Script Injection Failed:", chrome.runtime.lastError.message);
-                    if (retries > 0) {
-                        setTimeout(() => triggerClick(tabId, retries - 1, finalAmount), 500);
+                    if (retries > 0 && !err.message.includes("closed before a response")) {
+                        console.log("Retrying click in 500ms...");
+                        setTimeout(() => triggerClick(tabId, retries - 1), 500);
                     }
                 } else {
-                    console.log("Injection Success", results);
+                    console.log("Click command sent & acknowledged");
                 }
             });
         };
 
-        // Determine the final amount to use (Test Mode overrides button amount)
-        chrome.storage.local.get(['testModeEnabled', 'testAmount'], (res) => {
-            let finalAmount = request.amount || 0;
-
-            // If Test Mode is ON, always use testAmount
-            if (res.testModeEnabled === true && res.testAmount > 0) {
-                finalAmount = res.testAmount;
-                console.log(`[Auto-Bet] Test Mode ON: Using fixed amount $${finalAmount}`);
+        // 1. Check if tab exists
+        chrome.tabs.query({}, (tabs) => {
+            const existingTab = tabs.find(t => t.url === url || t.url.includes(url));
+            if (existingTab) {
+                chrome.tabs.update(existingTab.id, { active: true }, () => {
+                    // Wait a bit for focus
+                    setTimeout(() => triggerClick(existingTab.id), 1000);
+                });
             } else {
-                console.log(`[Auto-Bet] Normal Mode: Using amount $${finalAmount}`);
+                chrome.tabs.create({ url: url, active: true }, (newTab) => {
+                    // Wait for load
+                    const listener = (tabId, changeInfo) => {
+                        if (tabId === newTab.id && changeInfo.status === 'complete') {
+                            chrome.tabs.onUpdated.removeListener(listener);
+                            setTimeout(() => triggerClick(newTab.id), 2000);
+                        }
+                    };
+                    chrome.tabs.onUpdated.addListener(listener);
+                });
             }
-
-            // Find or create tab
-            chrome.tabs.query({}, (tabs) => {
-                const existingTab = tabs.find(t => t.url === url || t.url.includes(url));
-                if (existingTab) {
-                    chrome.tabs.update(existingTab.id, { active: true }, () => {
-                        setTimeout(() => triggerClick(existingTab.id, 3, finalAmount), 1000);
-                    });
-                } else {
-                    chrome.tabs.create({ url: url, active: true }, (newTab) => {
-                        const listener = (tabId, changeInfo) => {
-                            if (tabId === newTab.id && changeInfo.status === 'complete') {
-                                chrome.tabs.onUpdated.removeListener(listener);
-                                setTimeout(() => triggerClick(newTab.id, 3, finalAmount), 2000);
-                            }
-                        };
-                        chrome.tabs.onUpdated.addListener(listener);
-                    });
-                }
-            });
         });
         return true;
     }
-
+    
     // Handle Stake Minimum Bet Warning - Send TG notification
     if (request.action === "stake_min_bet_warning") {
         chrome.storage.local.get(['tgBotToken', 'tgChatId'], (res) => {
             const token = res.tgBotToken;
             const chatId = res.tgChatId;
-
+            
             if (token && chatId) {
-                const message = request.message ||
-                    `[WARNING] *Stake Minimum Bet Warning*\n\n` +
-                    `Team: ${request.team}\n` +
-                    `Entered: ${request.enteredAmount}\n` +
-                    `Minimum Required: ₹${request.minAmount}\n` +
-                    `Odds: ${request.odds}`;
-
+                const message = 
+                    `⚠️ *Stake Minimum Bet Warning*\n\n` +
+                    `*Team:* ${request.team}\n` +
+                    `*Entered:* ${request.enteredAmount}\n` +
+                    `*Minimum Required:* ₹${request.minAmount}\n` +
+                    `*Odds:* ${request.odds}\n` +
+                    `_Time: ${new Date().toLocaleTimeString()}_`;
+                
                 const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(message)}&parse_mode=Markdown`;
-
+                
                 fetch(url)
                     .then(r => r.json())
                     .then(data => {
@@ -363,6 +163,87 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     .catch(e => console.error("[TG] Failed to send min bet warning:", e));
             }
         });
+        return true;
+    }
+    
+    // Handle general bet errors - Send TG notification and store in history
+    if (request.action === "bet_error") {
+        console.warn(`[Bet Error] ${request.error}: ${request.details}`);
+        
+        chrome.storage.local.get(['tgBotToken', 'tgChatId', 'betHistory'], (res) => {
+            const token = res.tgBotToken;
+            const chatId = res.tgChatId;
+            let history = res.betHistory || [];
+            
+            // Find and update any PENDING entry for this team
+            if (request.team) {
+                const pendingIndex = history.findIndex(h => 
+                    h.status === 'PENDING' && 
+                    h.team === request.team
+                );
+                
+                // Create error entry
+                const entry = {
+                    id: pendingIndex >= 0 ? history[pendingIndex].id : Date.now(),
+                    team: request.team || 'Unknown',
+                    odds: request.odds || '-',
+                    amount: request.amount || '-',
+                    status: 'ERROR',
+                    reason: `${request.error}: ${request.details}`,
+                    timestamp: new Date().toISOString(),
+                    source: 'stake'
+                };
+                
+                if (pendingIndex >= 0) {
+                    history[pendingIndex] = entry;
+                } else {
+                    history.unshift(entry);
+                    if (history.length > 100) history.pop();
+                }
+                
+                chrome.storage.local.set({ betHistory: history });
+            }
+            
+            // Send to Telegram
+            if (token && chatId) {
+                let emoji = '⚠️';
+                if (request.error === 'Insufficient Balance') emoji = '💰';
+                else if (request.error === 'Max retries reached') emoji = '🔄';
+                
+                const message = 
+                    `${emoji} *Bet Error*\n\n` +
+                    `*Error:* ${request.error}\n` +
+                    `*Details:* ${request.details}\n` +
+                    (request.team ? `*Team:* ${request.team}\n` : '') +
+                    (request.amount ? `*Amount:* $${request.amount}\n` : '') +
+                    (request.odds ? `*Odds:* ${request.odds}\n` : '') +
+                    `_Time: ${new Date().toLocaleTimeString()}_`;
+                
+                const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(message)}&parse_mode=Markdown`;
+                
+                fetch(url)
+                    .then(r => r.json())
+                    .then(data => {
+                        console.log("[TG] Bet error notification sent:", data.ok);
+                    })
+                    .catch(e => console.error("[TG] Failed to send bet error:", e));
+            }
+        });
+        
+        // Show Chrome notification for errors
+        try {
+            chrome.notifications.create(`bet-error-${Date.now()}`, {
+                type: 'basic',
+                iconUrl: 'icon.png',
+                title: `⚠️ ${request.error}`,
+                message: request.details,
+                priority: 2,
+                requireInteraction: false
+            });
+        } catch (e) {
+            console.log("[Notification] Error:", e);
+        }
+        
         return true;
     }
 });
@@ -838,17 +719,142 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // async
     }
 
+    // Handle PENDING status - bet is being processed
+    if (request.action === "bet_status_update" && request.status === "PENDING") {
+        chrome.storage.local.get(['betHistory'], (result) => {
+            const history = result.betHistory || [];
+            
+            // Create pending entry
+            const entry = {
+                id: Date.now(),
+                team: request.team,
+                odds: request.odds,
+                amount: request.amount,
+                duration: 0,
+                status: 'PENDING',
+                timestamp: request.timestamp || new Date().toISOString(),
+                source: 'stake'
+            };
+            
+            // Add to history
+            history.unshift(entry);
+            if (history.length > 100) history.pop();
+            
+            chrome.storage.local.set({ betHistory: history });
+            console.log(`[BetHistory] ⏳ PENDING: ${entry.team} @ ${entry.odds} | $${entry.amount}`);
+        });
+    }
+
     if (request.action === "bet_placed_success") {
-        chrome.storage.local.get(['tgBotToken', 'tgChatId'], (result) => {
+        // Store in bet history - update PENDING to COMPLETED
+        chrome.storage.local.get(['betHistory', 'tgBotToken', 'tgChatId'], (result) => {
+            let history = result.betHistory || [];
+            
+            // Find and update the PENDING entry for this bet, or create new
+            const pendingIndex = history.findIndex(h => 
+                h.status === 'PENDING' && 
+                h.team === request.team && 
+                h.amount === request.amount
+            );
+            
+            const entry = {
+                id: pendingIndex >= 0 ? history[pendingIndex].id : Date.now(),
+                team: request.team,
+                odds: request.odds,
+                amount: request.amount,
+                duration: request.duration || 0,
+                durationSec: request.durationSec || '0',
+                payout: request.payout || null,
+                status: request.status || 'COMPLETED',
+                timestamp: request.timestamp || new Date().toISOString(),
+                source: 'stake'
+            };
+            
+            if (pendingIndex >= 0) {
+                // Update existing pending entry
+                history[pendingIndex] = entry;
+            } else {
+                // Add new entry
+                history.unshift(entry);
+                if (history.length > 100) history.pop();
+            }
+            
+            // Save history
+            chrome.storage.local.set({ betHistory: history });
+            
+            console.log(`[BetHistory] ✅ COMPLETED: ${entry.team} @ ${entry.odds} | $${entry.amount} | ${entry.duration}ms`);
+            
+            // Send Telegram notification
             const botToken = result.tgBotToken;
             const chatId = result.tgChatId;
             if (botToken && chatId) {
-                const msg = `[SUCCESS] BET SLIP FILLED (Auto)\n\n` +
-                    `Team: ${request.team}\n` +
-                    `Odds Verified: ${request.odds}\n` +
-                    `Amount: ${request.amount || '0.01'}\n` +
-                    `\nPlease confirm manually!`;
-                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}`;
+                const durationStr = entry.duration > 1000 
+                    ? `${(entry.duration/1000).toFixed(2)}s` 
+                    : `${entry.duration}ms`;
+                    
+                const msg = `✅ *BET PLACED SUCCESSFULLY*\n\n` +
+                    `🎯 Team: ${request.team}\n` +
+                    `📊 Odds: ${request.odds}\n` +
+                    `💰 Amount: $${request.amount}\n` +
+                    `${request.payout ? `💵 Est. Payout: $${request.payout}\n` : ''}` +
+                    `⏱️ Executed in: ${durationStr}\n` +
+                    `\n_${new Date().toLocaleTimeString()}_`;
+                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`;
+                fetch(url).catch(e => console.error("TG Send Fail", e));
+            }
+        });
+    }
+    
+    if (request.action === "bet_placed_failed") {
+        // Store failed bet in history - update PENDING to FAILED
+        chrome.storage.local.get(['betHistory', 'tgBotToken', 'tgChatId'], (result) => {
+            let history = result.betHistory || [];
+            
+            // Find and update the PENDING entry
+            const pendingIndex = history.findIndex(h => 
+                h.status === 'PENDING' && 
+                h.team === request.team && 
+                h.amount === request.amount
+            );
+            
+            // Create history entry for failed bet
+            const entry = {
+                id: pendingIndex >= 0 ? history[pendingIndex].id : Date.now(),
+                team: request.team,
+                odds: request.odds,
+                amount: request.amount,
+                duration: request.duration || 0,
+                status: 'FAILED',
+                reason: request.reason || 'Unknown error',
+                timestamp: new Date().toISOString(),
+                source: 'stake'
+            };
+            
+            if (pendingIndex >= 0) {
+                // Update existing pending entry
+                history[pendingIndex] = entry;
+            } else {
+                // Add new entry
+                history.unshift(entry);
+                if (history.length > 100) history.pop();
+            }
+            
+            chrome.storage.local.set({ betHistory: history });
+            
+            console.log(`[BetHistory] ❌ FAILED: ${entry.team} - ${entry.reason}`);
+            
+            // Send Telegram notification for failure
+            const botToken = result.tgBotToken;
+            const chatId = result.tgChatId;
+            if (botToken && chatId) {
+                const msg = `❌ *BET PLACEMENT FAILED*\n\n` +
+                    `🎯 Team: ${request.team}\n` +
+                    `📊 Odds: ${request.odds}\n` +
+                    `💰 Amount: $${request.amount}\n` +
+                    `⚠️ Reason: ${request.reason}\n` +
+                    `⏱️ Duration: ${request.duration}ms\n` +
+                    `\n_${new Date().toLocaleTimeString()}_`;
+                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`;
                 fetch(url).catch(e => console.error("TG Send Fail", e));
             }
         });

@@ -5,28 +5,28 @@ const sentArbAlerts = new Set();
 function sendArbTelegramAlert(opportunity) {
     // Create unique key to avoid duplicate alerts
     const alertKey = `${opportunity.match}-${opportunity.polyTeam}-${opportunity.stakeTeam}-${opportunity.arbPercent}`;
-
+    
     if (sentArbAlerts.has(alertKey)) {
         console.log('[TG] Duplicate alert skipped:', alertKey);
         return;
     }
-
+    
     sentArbAlerts.add(alertKey);
-
+    
     // Clear old alerts after 5 minutes
     setTimeout(() => sentArbAlerts.delete(alertKey), 5 * 60 * 1000);
-
+    
     chrome.storage.local.get(['tgBotToken', 'tgChatId'], (res) => {
         const token = res.tgBotToken;
         const chatId = res.tgChatId;
-
+        
         if (!token || !chatId) {
             console.warn('[TG] Not configured');
             return;
         }
-
-        const message =
-            `[ARB ALERT] *Arbitrage Opportunity!*
+        
+        const message = 
+`[ARB ALERT] *Arbitrage Opportunity!*
 
 *Match:* ${opportunity.match}
 
@@ -38,9 +38,9 @@ function sendArbTelegramAlert(opportunity) {
 *Profit:* $${opportunity.profit}
 
 _Time: ${new Date().toLocaleTimeString()}_`;
-
+        
         const url = `https://api.telegram.org/bot${token}/sendMessage`;
-
+        
         fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -50,15 +50,15 @@ _Time: ${new Date().toLocaleTimeString()}_`;
                 parse_mode: 'Markdown'
             })
         })
-            .then(r => r.json())
-            .then(data => {
-                if (data.ok) {
-                    console.log('[TG] Arb alert sent successfully');
-                } else {
-                    console.error('[TG] Failed:', data.description);
-                }
-            })
-            .catch(e => console.error('[TG] Error:', e));
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                console.log('[TG] Arb alert sent successfully');
+            } else {
+                console.error('[TG] Failed:', data.description);
+            }
+        })
+        .catch(e => console.error('[TG] Error:', e));
     });
 }
 
@@ -112,21 +112,38 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Extract ID
             const btnId = e.target.getAttribute('data-id');
-            const stakeAmt = e.target.getAttribute('data-stake');
+            let stakeAmt = e.target.getAttribute('data-stake');
             const expectedOdds = e.target.getAttribute('data-odds');
 
-            if (url && url !== '#' && url !== 'undefined') {
-                chrome.runtime.sendMessage({
-                    action: "open_and_click",
-                    url: url,
-                    team: team,
-                    id: btnId,
-                    amount: parseFloat(stakeAmt), // Force Float
-                    expectedOdds: expectedOdds
-                });
-            } else {
-                alert("Link not available. Please rescan.");
-            }
+            // Check for test mode - use test amount override
+            chrome.storage.local.get(['testModeEnabled', 'testAmount'], (settings) => {
+                // If test mode is on, use the test amount
+                if (settings.testModeEnabled) {
+                    const testAmt = parseFloat(settings.testAmount) || 0.1;
+                    stakeAmt = testAmt.toString();
+                    console.log('[TestMode] Using test amount:', stakeAmt);
+                }
+                
+                // Also check mainStakeInput value as fallback
+                const mainInput = document.getElementById('mainStakeInput');
+                if (mainInput && mainInput.value && parseFloat(mainInput.value) > 0) {
+                    stakeAmt = mainInput.value;
+                    console.log('[TestMode] Using mainStakeInput amount:', stakeAmt);
+                }
+
+                if (url && url !== '#' && url !== 'undefined') {
+                    chrome.runtime.sendMessage({
+                        action: "open_and_click",
+                        url: url,
+                        team: team,
+                        id: btnId,
+                        amount: stakeAmt,
+                        expectedOdds: expectedOdds
+                    });
+                } else {
+                    alert("Link not available. Please rescan.");
+                }
+            });
         }
     });
 
@@ -250,6 +267,64 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- Test Mode Toggle ---
+    const toggleTestMode = document.getElementById('toggleTestMode');
+    const testModeLabel = document.getElementById('testModeLabel');
+    const testAmountInput = document.getElementById('testAmountInput');
+    const mainStakeInput = document.getElementById('mainStakeInput');
+
+    function updateTestModeUI(isActive) {
+        if (toggleTestMode) toggleTestMode.checked = isActive;
+        if (testModeLabel) {
+            testModeLabel.style.color = isActive ? "#e74c3c" : "#95a5a6";
+            testModeLabel.textContent = isActive ? "TEST ON" : "TEST";
+        }
+        // Show/hide the test amount input next to the toggle
+        if (testAmountInput) {
+            testAmountInput.style.display = isActive ? 'inline-block' : 'none';
+        }
+        // Also enable/show the main stake input when test mode is on
+        if (mainStakeInput) {
+            mainStakeInput.style.border = isActive ? '2px solid #e74c3c' : '1px solid #ccc';
+        }
+    }
+
+    chrome.storage.local.get(['testModeEnabled', 'testAmount'], (result) => {
+        const isTest = result.testModeEnabled === true;
+        updateTestModeUI(isTest);
+        if (testAmountInput && result.testAmount) {
+            testAmountInput.value = result.testAmount;
+        }
+        if (mainStakeInput && result.testAmount) {
+            mainStakeInput.value = result.testAmount;
+        }
+    });
+
+    if (toggleTestMode) {
+        toggleTestMode.addEventListener('change', (e) => {
+            const isTest = e.target.checked;
+            updateTestModeUI(isTest);
+            chrome.storage.local.set({ testModeEnabled: isTest });
+        });
+    }
+
+    // Save test amount when changed
+    if (testAmountInput) {
+        testAmountInput.addEventListener('change', (e) => {
+            const amount = parseFloat(e.target.value) || 0.1;
+            chrome.storage.local.set({ testAmount: amount });
+            if (mainStakeInput) mainStakeInput.value = amount;
+        });
+    }
+
+    if (mainStakeInput) {
+        mainStakeInput.addEventListener('change', (e) => {
+            const amount = parseFloat(e.target.value) || 0.1;
+            chrome.storage.local.set({ testAmount: amount });
+            if (testAmountInput) testAmountInput.value = amount;
+        });
+    }
+
     // --- Live Scan Toggle ---
     const toggleLive = document.getElementById('toggleLiveScan');
     const liveStatusLabel = document.getElementById('liveScanStatusLabel');
@@ -283,7 +358,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const tabs = await chrome.tabs.query({});
             for (const tab of tabs) {
                 if (tab.url && (
-                    tab.url.includes('stake.com') ||
+                    tab.url.includes('stake.com') || 
                     tab.url.includes('stake.us') ||
                     tab.url.includes('polymarket.com') ||
                     tab.url.includes('sx.bet')
@@ -294,45 +369,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         // Tab might not have content script loaded
                     }
                 }
-            }
-        });
-    }
-
-    // --- Highlight Toggle ---
-    const toggleHighlight = document.getElementById('toggleHighlight');
-    const highlightStatusLabel = document.getElementById('highlightStatusLabel');
-
-    function updateHighlightUI(isActive) {
-        if (toggleHighlight) toggleHighlight.checked = isActive;
-        if (highlightStatusLabel) {
-            highlightStatusLabel.style.color = isActive ? "#27ae60" : "#95a5a6";
-        }
-    }
-
-    chrome.storage.local.get(['highlightEnabled'], (result) => {
-        const isEnabled = result.highlightEnabled !== false; // Default true
-        updateHighlightUI(isEnabled);
-    });
-
-    if (toggleHighlight) {
-        toggleHighlight.addEventListener('change', async (e) => {
-            const isEnabled = e.target.checked;
-            updateHighlightUI(isEnabled);
-            chrome.storage.local.set({ highlightEnabled: isEnabled });
-
-            // If disabled, clear existing highlights
-            if (!isEnabled) {
-                const tabs = await chrome.tabs.query({});
-                for (const tab of tabs) {
-                    if (tab.url && (tab.url.includes('stake') || tab.url.includes('polymarket') || tab.url.includes('sx.bet'))) {
-                        try {
-                            chrome.tabs.sendMessage(tab.id, { action: "highlight_odds", targets: [] });
-                        } catch (err) { /* ignore */ }
-                    }
-                }
-            } else {
-                // Re-run highlighting
-                updateUI();
             }
         });
     }
@@ -422,41 +458,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             let odds = null;
 
                             // Check for suspended/unavailable
-                            // Check for suspended/unavailable/settled
                             const txt = btn.textContent.toLowerCase();
-                            if (txt.includes('settled')) { // New check
-                                odds = 'Settled';
-                            } else if (txt.includes('suspended') || txt.includes('unavailable') || btn.disabled) {
+                            if (txt.includes('suspended') || txt.includes('unavailable') || btn.disabled) {
                                 odds = 'Suspended';
                                 console.log(`Found suspended/unavailable odds for team ${team}`);
                             } else {
                                 if (matchCents) {
                                     const cents = parseInt(matchCents[1], 10);
-                                    if (cents >= 100) odds = 'Settled'; // Explicit cents >= 100 is Settled
-                                    else if (cents > 0) odds = (100 / cents).toFixed(2);
+                                    if (cents > 0) odds = (100 / cents).toFixed(2);
                                 } else if (matchDecimal) {
-                                    const val = parseFloat(matchDecimal[1]);
-                                    if (val >= 1.01) odds = val; // Allow > 100
-                                } else {
-                                    // Fallback integer parsing (if regex failed earlier but we might have simplified logic here)
-                                    // Re-check regexes in case `matchCents` / `matchDecimal` were strict from earlier block
-                                    // Actually `matchCents` and `matchDecimal` variables come from earlier in the function.
-                                    // Let's rely on them if they matched.
-                                    // If they didn't match, check for plain integer?
-                                    // The code at line 381/382 defined matchCents/matchDecimal.
-                                    // We should probably refine that part or logic here.
-                                    // For now, let's just use what we have.
-                                    // If neither matched but we have text...
-                                    // But the original code only checked these variables.
-                                    // Let's treat a plain number in text as potentially valid if regex missed?
-                                    // The original `matchCents` regex was `(\d+)\s*¢`.
-                                    // The original `matchDecimal` regex was `(\d+\.\d{2})`. 
-                                    // Let's relax `matchDecimal` in the replacement slightly? 
-                                    // Ideally I should modify lines 381-382 too but I am focusing on this block.
-                                    // Wait, 382 is `(\d+\.\d{2})`. That enforces 2 decimals.
-                                    // If I want to support `105.0` or `105.5`, I should probably fix that regex too.
-                                    // But given tool limitations, I will stick to logic here. 
-                                    // If matchDecimal matched, use it.
+                                    odds = parseFloat(matchDecimal[1]);
                                 }
                             }
 
@@ -629,39 +640,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function updateUI() {
-        try {
-            const result = await chrome.storage.local.get(['polymarketData', 'stackData', 'strictMatch', 'stakeAmount', 'liveScanEnabled', 'geminiApiKey', 'aiEnabled']);
+    function updateUI() {
+        chrome.storage.local.get(['polymarketData', 'stackData', 'strictMatch', 'stakeAmount', 'liveScanEnabled'], (result) => {
             const poly = result.polymarketData;
             const stack = result.stackData;
             const stakeAmt = result.stakeAmount || 100; // Default 100 if not set
             const isLive = result.liveScanEnabled === true;
-            const apiKey = result.geminiApiKey;
-            const aiEnabled = result.aiEnabled === true; // Check toggle
-            const isStrict = result.strictMatch === true;
-            const testMode = result.testModeEnabled === true;
-            const testAmount = result.testAmount || 1;
-
-            console.log("[updateUI] Data loaded:", { poly: poly?.odds?.length, stack: stack?.odds?.length, isStrict, apiKey, aiEnabled, testMode });
-
-            // Update Input Visibility
-            const mainStakeInput = document.getElementById('mainStakeInput');
-            const testAmtInput = document.getElementById('testAmountInput');
-            const testLabel = document.getElementById('testModeLabel');
-
-            if (testLabel) testLabel.style.color = testMode ? '#e67e22' : '#95a5a6';
-
-            if (mainStakeInput && testAmtInput) {
-                if (testMode) {
-                    mainStakeInput.style.display = 'none';
-                    testAmtInput.style.display = 'inline-block';
-                    testAmtInput.value = testAmount;
-                } else {
-                    mainStakeInput.style.display = 'inline-block';
-                    testAmtInput.style.display = 'none';
-                }
-            }
-
 
             let html = '';
 
@@ -670,7 +654,7 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const now = new Date().toLocaleTimeString();
                 const liveIndicator = isLive ? '<span style="color:#27ae60; font-weight:bold;">● LIVE</span>' : '';
-
+                
                 if (poly) {
                     html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams ${liveIndicator} <span style="margin-left:10px; color:#3498db;">Updated: ${now}</span></p>`;
                 }
@@ -679,35 +663,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (poly && stack) {
-                    html += await generateArbitrageTable(poly.odds, stack.odds, isStrict, stakeAmt, apiKey, aiEnabled, testMode, testAmount);
+                    // Get strict setting
+                    const isStrict = result.strictMatch === true;
+                    html += generateArbitrageTable(poly.odds, stack.odds, isStrict, stakeAmt);
                 }
             }
-            if (resultsArea) {
-                resultsArea.innerHTML = html;
-            } else {
-                console.error("resultsArea not found!");
-            }
-        } catch (err) {
-            console.error("Error updating UI:", err);
-            if (resultsArea) resultsArea.innerHTML = `<p style="color:red">Error rendering table: ${err.message}</p>`;
-        }
+            if (resultsArea) resultsArea.innerHTML = html;
+        });
     }
-    async function generateArbitrageTable(polyOdds, stackOdds, strictMatch, stakeAmount, apiKey, aiEnabled, testMode, testAmount) {
+
+    function generateArbitrageTable(polyOdds, stackOdds, strictMatch, stakeAmount) {
         // Goal Table Format:
         // Match (e.g. HOU-DEN) | Poly HOU | Poly DEN | Stake HOU | Stake DEN | Arb % (P-HOU/S-DEN) | Arb % (P-DEN/S-HOU)
 
-        const matchesToHighlight = []; // Collection for website highlighting
-
-        let matchCounter = 0;
-        const borderColors = ['#f44336', '#e91e63', '#9c27b0', '#673ab7', '#3f51b5', '#2196f3', '#03a9f4', '#00bcd4', '#009688', '#4caf50', '#8bc34a', '#cddc39', '#ffc107', '#ff9800', '#ff5722'];
-
         let tableHtml = `
             <style>
-                table { border-collapse: separate; border-spacing: 0 4px; width: 100%; }
+                table { border-collapse: collapse; width: 100%; }
                 /* Zebra Striping */
-                tbody tr { background-color: #f9f9f9; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+                tbody tr:nth-child(even) { background-color: #f9f9f9; }
+                tbody tr:nth-child(odd) { background-color: #ffffff; }
                 /* Hover effect */
-                tbody tr:hover { transform: translateY(-1px); box-shadow: 0 2px 5px rgba(0,0,0,0.15); transition: all 0.2s; }
+                tbody tr:hover { background-color: #f0f0f0; }
                 /* Buttons */
                 .bet-btn { border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; margin: 2px; color: white; display: inline-block; text-decoration: none; }
                 .poly-btn { background-color: #29b6f6; }
@@ -718,7 +694,7 @@ document.addEventListener('DOMContentLoaded', () => {
             <table>
                 <thead>
                     <tr>
-                        <th style="padding: 8px;">Match</th>
+                        <th>Match</th>
                         <th style="color:#29b6f6">Poly H</th>
                         <th style="color:#29b6f6">Poly A</th>
                         <th style="color:#00bfa5">Stake H</th>
@@ -728,65 +704,18 @@ document.addEventListener('DOMContentLoaded', () => {
                         <th>Actions</th>
                     </tr>
                 </thead>
-                <tbody>`;
+                <tbody>
+        `;
 
-        // NBA City/Team Mappings for fuzzy match
-        const NBA_CITY_MAPPINGS = {
-            'ROCKETS': ['HOUSTON ROCKETS', 'HOUSTON', 'HOU'],
-            'LAKERS': ['LOS ANGELES LAKERS', 'LA LAKERS', 'LAL', 'LOS ANGELES'],
-            'KNICKS': ['NEW YORK KNICKS', 'NY KNICKS', 'NYK', 'NEW YORK'],
-            'CAVALIERS': ['CLEVELAND CAVALIERS', 'CLEVELAND', 'CLE', 'CAVS'],
-            'CELTICS': ['BOSTON CELTICS', 'BOSTON', 'BOS'],
-            'WARRIORS': ['GOLDEN STATE WARRIORS', 'GOLDEN STATE', 'GSW', 'GS'],
-            'MAVERICKS': ['DALLAS MAVERICKS', 'DALLAS', 'DAL', 'MAVS'],
-            'SPURS': ['SAN ANTONIO SPURS', 'SAN ANTONIO', 'SAS'],
-            'THUNDER': ['OKLAHOMA CITY THUNDER', 'OKC', 'OKLAHOMA CITY'],
-            'SUNS': ['PHOENIX SUNS', 'PHOENIX', 'PHX'],
-            'BUCKS': ['MILWAUKEE BUCKS', 'MILWAUKEE', 'MIL'],
-            'HEAT': ['MIAMI HEAT', 'MIAMI', 'MIA'],
-            'BULLS': ['CHICAGO BULLS', 'CHICAGO', 'CHI'],
-            'NETS': ['BROOKLYN NETS', 'BROOKLYN', 'BKN'],
-            '76ERS': ['PHILADELPHIA 76ERS', 'PHILLY', 'PHI', 'SIXERS'],
-            'RAPTORS': ['TORONTO RAPTORS', 'TORONTO', 'TOR'],
-            'HAWKS': ['ATLANTA HAWKS', 'ATLANTA', 'ATL'],
-            'HORNETS': ['CHARLOTTE HORNETS', 'CHARLOTTE', 'CHA'],
-            'WIZARDS': ['WASHINGTON WIZARDS', 'WASHINGTON', 'WAS'],
-            'MAGIC': ['ORLANDO MAGIC', 'ORLANDO', 'ORL'],
-            'PACERS': ['INDIANA PACERS', 'INDIANA', 'IND'],
-            'PISTONS': ['DETROIT PISTONS', 'DETROIT', 'DET'],
-            'CLIPPERS': ['LA CLIPPERS', 'LOS ANGELES CLIPPERS', 'LAC'],
-            'KINGS': ['SACRAMENTO KINGS', 'SACRAMENTO', 'SAC'],
-            'TRAIL BLAZERS': ['PORTLAND TRAIL BLAZERS', 'PORTLAND', 'POR', 'BLAZERS'],
-            'JAZZ': ['UTAH JAZZ', 'UTAH', 'UTA'],
-            'NUGGETS': ['DENVER NUGGETS', 'DENVER', 'DEN'],
-            'TIMBERWOLVES': ['MINNESOTA TIMBERWOLVES', 'MINNESOTA', 'MIN', 'WOLVES'],
-            'PELICANS': ['NEW ORLEANS PELICANS', 'NEW ORLEANS', 'NOP'],
-            'GRIZZLIES': ['MEMPHIS GRIZZLIES', 'MEMPHIS', 'MEM']
-        };
-
-        // Helper: Check if two names match via city mappings
-        const matchViaCityMapping = (name1, name2) => {
-            const n1 = name1.toUpperCase();
-            const n2 = name2.toUpperCase();
-            for (const [nickname, aliases] of Object.entries(NBA_CITY_MAPPINGS)) {
-                const allVariants = [nickname, ...aliases];
-                const n1Match = allVariants.some(v => n1.includes(v) || v.includes(n1));
-                const n2Match = allVariants.some(v => n2.includes(v) || v.includes(n2));
-                if (n1Match && n2Match) return true;
-            }
-            return false;
-        };
-
-        // Helper to find a team in a list (Enhanced Matching with Confidence)
-        const findOdds = (list, name, sourceEventTime = null) => {
+        // Helper to find a team in a list (Enhanced Matching)
+        const findOdds = (list, name) => {
             if (strictMatch) {
-                const exact = list.find(x => x.team === name);
-                return exact ? { item: exact, confidence: 100 } : null;
+                return list.find(x => x.team === name);
             } else {
                 // 0. Pre-clean
                 const clean = (s) => s.replace(/[^A-Z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
                 const n1 = clean(name.toUpperCase());
-
+                
                 // Handle "33 33" -> "33" deduplication
                 const dedupe = (s) => {
                     const parts = s.split(' ');
@@ -797,7 +726,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // 1. Strict Match (after cleaning)
                 let match = list.find(x => dedupe(clean(x.team.toUpperCase())) === n1Clean);
-                if (match) return { item: match, confidence: 100 };
+                if (match) return match;
 
                 // If strictMatch was false, but we found a clean strict match, return it.
                 if (strictMatch) return null;
@@ -810,11 +739,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     const n2 = dedupe(clean(item.team.toUpperCase()));
                     let score = 0;
 
-                    // NEW: City Mapping Check (e.g., "Rockets" matches "Houston Rockets")
-                    if (matchViaCityMapping(n1Clean, n2)) {
-                        score += 60; // Strong match via city mapping
-                    }
-
                     // A. Exact Substring
                     if (n1Clean.includes(n2) || n2.includes(n1Clean)) score += 60;
 
@@ -822,7 +746,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const first1 = n1Clean.split(' ')[0];
                     const first2 = n2.split(' ')[0];
                     if (first1 === first2 && first1.length >= 2) score += 30;
-
+                    
                     // B2. Direct number match ("33" matches "33 TEAM")
                     if (/^\d+$/.test(first1) && first1 === first2) {
                         score += 60; // Strong match for numeric teams
@@ -844,14 +768,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         score += (matches * 20);
                         if (strongMatches > 0) score += 20;
                     }
-
+                    
                     // C2. Number-based team matching (e.g., "33" vs "33 TEAM")
                     const num1 = n1Clean.match(/^\d+/)?.[0];
                     const num2 = n2.match(/^\d+/)?.[0];
                     if (num1 && num2 && num1 === num2) {
                         score += 50; // Strong match for number-based teams
                     }
-
+                    
                     // C3. Core name matching (removes prefixes like "G1", "T1" and suffixes like "TEAM")
                     const extractCore = (s) => {
                         let core = s.replace(/^[A-Z]\d\s*/i, ''); // Remove G1, T1 prefix
@@ -865,14 +789,17 @@ document.addEventListener('DOMContentLoaded', () => {
                             score += 55; // Strong match for core names like "GENONE"
                         }
                     }
-
+                    
                     // C4. Short prefix matching (e.g., "G1" matches "G1 GENONE")
+                    // If one name is a short prefix (2-3 chars) that appears at start of other
                     const shortName = n1.length <= 3 ? n1 : (n2.length <= 3 ? n2 : null);
                     const longName = n1.length <= 3 ? n2 : (n2.length <= 3 ? n1 : null);
                     if (shortName && longName) {
+                        // Check if long name starts with short name (e.g., "G1 GENONE" starts with "G1")
                         if (longName.startsWith(shortName + ' ') || longName.startsWith(shortName)) {
                             score += 60; // Strong match
                         }
+                        // Also check if short name appears anywhere as a token
                         const longTokens = longName.split(' ');
                         if (longTokens.includes(shortName)) {
                             score += 50;
@@ -896,13 +823,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             score += 45;
                         }
                     }
-
-                    // D2. Direct name match after removing prefix
+                    
+                    // D2. Direct name match after removing prefix (e.g., "GENONE" matches "G1 GENONE")
+                    // Extract the last word/main name from each
                     const getMainName = (s) => {
                         const parts = s.split(' ');
+                        // If first part is short (like G1, T1), return the rest
                         if (parts.length > 1 && parts[0].length <= 2) {
                             return parts.slice(1).join(' ');
                         }
+                        // Return the longest part
                         return parts.reduce((a, b) => a.length >= b.length ? a : b, '');
                     };
                     const main1 = getMainName(n1);
@@ -928,24 +858,39 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (sIdx === short.length) score += 45;
                         }
                     }
-
-                    // F. G1/T1 style abbrevs
+                    
+                    // F. Special case: G1/T1 style abbrevs matching full names
+                    // "G1" matches "GENONE" (G + 1/ONE)
+                    // "T1" matches "TEAMONE" etc.
                     const abbrevMatch = (abbr, full) => {
                         if (abbr.length !== 2) return false;
                         const letter = abbr[0].toUpperCase();
                         const num = abbr[1];
+                        
+                        // Check if full name starts with same letter
                         if (full[0].toUpperCase() !== letter) return false;
+                        
+                        // Check if number part matches
+                        // 1 = ONE, 2 = TWO, 3 = THREE, etc.
                         const numWords = { '1': 'ONE', '2': 'TWO', '3': 'THREE', '4': 'FOUR', '5': 'FIVE' };
-                        if (numWords[num] && full.toUpperCase().includes(numWords[num])) return true;
-                        if (full.includes(num)) return true;
+                        if (numWords[num] && full.toUpperCase().includes(numWords[num])) {
+                            return true;
+                        }
+                        
+                        // Also check if full name contains the number
+                        if (full.includes(num)) {
+                            return true;
+                        }
+                        
                         return false;
                     };
+                    
                     if (n1Clean.length === 2 && n2.length > 3) {
                         if (abbrevMatch(n1Clean, n2)) score += 70;
                     } else if (n2.length === 2 && n1Clean.length > 3) {
                         if (abbrevMatch(n2, n1Clean)) score += 70;
                     }
-
+                    
                     // G. Known abbreviation mappings
                     const knownAbbrevs = {
                         'G1': ['GENONE', 'GEN1', 'GEN ONE', 'G ONE'],
@@ -963,143 +908,60 @@ document.addEventListener('DOMContentLoaded', () => {
                         score += 70;
                     }
 
-                    // CRITICAL: Time-based matching - REQUIRED to prevent cross-matching
-                    if (sourceEventTime && item.eventTime &&
-                        sourceEventTime !== 'LIVE' && item.eventTime !== 'LIVE') {
-
-                        // 1. Date Check
-                        const d1 = sourceEventTime.split(' ')[0];
-                        const d2 = item.eventTime.split(' ')[0];
-
-                        if (d1 && d2 && d1 !== d2) {
-                            // Different dates = different events, skip entirely
-                            return; // Don't consider this item at all
-                        }
-
-                        // 2. Strict Time Check (within 45 mins)
-                        const getTimeVal = (tStr) => {
-                            try {
-                                return new Date(tStr).getTime();
-                            } catch (e) { return 0; }
-                        };
-
-                        const t1 = getTimeVal(sourceEventTime);
-                        const t2 = getTimeVal(item.eventTime);
-
-                        if (t1 > 0 && t2 > 0) {
-                            const diffMins = Math.abs(t1 - t2) / 60000;
-                            if (diffMins > 45) {
-                                // console.log(`[Arb] Skipping - time mismatch > 45m: ${ diffMins }m diff for ${ name } vs ${ item.team } `); // Debugging
-                                return; // Don't consider this item at all
-                            }
-                        }
-
-                        // Same date (and within 45 min window) - boost score
-                        if (sourceEventTime === item.eventTime) {
-                            score += 50; // Exact time match (high bonus)
-                        } else if (d1 === d2) {
-                            score += 30; // Same date
-                        }
-                    }
-
                     if (score > bestScore) {
                         bestScore = score;
                         best = item;
                     }
                 });
 
-                if (bestScore >= 30) {
-                    // Calculate confidence as percentage (cap at 100)
-                    const confidence = Math.min(100, Math.round(bestScore / 2));
-                    return { item: best, confidence };
-                }
+                if (bestScore >= 40) return best;
                 return null;
             }
         };
 
-        // Helper to find team with its index and confidence
-        const findOddsWithIndex = (list, name, eventTime = null) => {
-            const result = findOdds(list, name, eventTime);
-            if (result && result.item) {
-                return { item: result.item, index: list.indexOf(result.item), confidence: result.confidence };
+        // Helper to find team with its index
+        const findOddsWithIndex = (list, name) => {
+            const item = findOdds(list, name);
+            if (item) {
+                return { item, index: list.indexOf(item) };
             }
             return null;
         };
 
-        // ========================
-        // NEW APPROACH: Group by Container Link to prevent cross-matching
-        // ========================
-
-        // Step 1: Group Polymarket odds by their container link
-        const polyGroups = {};
-        polyOdds.forEach((item, idx) => {
-            const groupKey = item.link || `idx_${idx} `;
-            if (!polyGroups[groupKey]) {
-                polyGroups[groupKey] = [];
-            }
-            polyGroups[groupKey].push(item);
-        });
-
-        console.log(`[Arb] Poly groups: ${Object.keys(polyGroups).length} `, polyGroups);
-
-        // Step 2: For each Stake pair, find a Poly group where BOTH teams exist
+        // NEW APPROACH: Iterate STAKE items in pairs (more reliable order)
+        // Then find matching Poly teams for each Stake pair
         for (let i = 0; i < stackOdds.length - 1; i += 2) {
             const stakeHome = stackOdds[i];
             const stakeAway = stackOdds[i + 1];
-
+            
+            // Skip if either is missing
             if (!stakeHome || !stakeAway) continue;
 
-            // Find a Poly group that contains BOTH teams
-            let matchedPolyGroup = null;
-            let home = null;
-            let away = null;
-            let matchConfidence = 0;
-
-            for (const [groupLink, groupItems] of Object.entries(polyGroups)) {
-                // Try to find both teams in this group
-                let homeResult = findOdds(groupItems, stakeHome.team, stakeHome.eventTime);
-                let awayResult = findOdds(groupItems, stakeAway.team, stakeAway.eventTime);
-
-                // AI Verify Home
-                if (homeResult && homeResult.confidence >= 15 && homeResult.confidence < 45 && apiKey && aiEnabled && window.geminiMatcher) {
-                    try {
-                        const aiRes = await window.geminiMatcher.verifyMatch(stakeHome.team, homeResult.item.team, apiKey);
-                        if (aiRes === 'SAME') homeResult.confidence = 80;
-                        else homeResult = null;
-                    } catch (e) { console.error("AI Error:", e); }
-                }
-
-                // AI Verify Away
-                if (awayResult && awayResult.confidence >= 15 && awayResult.confidence < 45 && apiKey && aiEnabled && window.geminiMatcher) {
-                    try {
-                        const aiRes = await window.geminiMatcher.verifyMatch(stakeAway.team, awayResult.item.team, apiKey);
-                        if (aiRes === 'SAME') awayResult.confidence = 80;
-                        else awayResult = null;
-                    } catch (e) { console.error("AI Error:", e); }
-                }
-
-                if (homeResult && awayResult && homeResult.item !== awayResult.item) {
-                    // BOTH teams found in SAME group - this is a valid match!
-                    matchedPolyGroup = groupLink;
-                    home = homeResult.item;
-                    away = awayResult.item;
-                    matchConfidence = Math.min(homeResult.confidence, awayResult.confidence);
-
-                    console.log(`[Arb] Match found in group ${groupLink}: ${home.team} vs ${away.team} `);
-                    break;
-                }
+            // Find corresponding teams in Polymarket
+            const homeResult = findOddsWithIndex(polyOdds, stakeHome.team);
+            const awayResult = findOddsWithIndex(polyOdds, stakeAway.team);
+            
+            // Skip if we can't find both teams in Poly
+            if (!homeResult || !awayResult) continue;
+            
+            const home = homeResult.item;
+            const away = awayResult.item;
+            
+            // CRITICAL: Verify Poly teams are from the SAME match (adjacent indices)
+            // If indices are not adjacent, these are from different matches - SKIP
+            const indexDiff = Math.abs(homeResult.index - awayResult.index);
+            if (indexDiff !== 1) {
+                console.log(`[Arb] Skipping mismatch: ${home.team} (idx ${homeResult.index}) vs ${away.team} (idx ${awayResult.index}) - not adjacent`);
+                continue;
             }
-
-            // Skip if no valid group found
-            if (!matchedPolyGroup || !home || !away) continue;
-
+            
             // Check if this is a DRAW match (3-way market) - skip/gray out
             const isDraw = (name) => {
                 const n = name.toUpperCase();
                 return n === 'DRAW' || n.includes('DRAW') || n === 'X' || n === 'TIE';
             };
-            const isDrawMatch = isDraw(home.team) || isDraw(away.team) ||
-                isDraw(stakeHome.team) || isDraw(stakeAway.team);
+            const isDrawMatch = isDraw(home.team) || isDraw(away.team) || 
+                               isDraw(stakeHome.team) || isDraw(stakeAway.team);
 
             if (stakeHome && stakeAway) {
                 // Determine confidence
@@ -1108,73 +970,52 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (home.team !== stakeHome.team) confidence -= 10;
                 }
 
-
-                // Handle Suspended/Settled Checks...
+                // Handle Suspended Checks...
                 const isSuspended = (val) => val === 'Suspended';
-                const isSettled = (val) => val === 'Settled';
-
+                
                 // DRAW match - show grayed out
                 if (isDrawMatch) {
-                    continue; // Skip draw matches entirely from view to reduce clutter
+                    const trunc = (str) => str.length > 4 ? str.substring(0, 4) : str;
+                    tableHtml += `
+                        <tr style="background-color: #2d2d3a; opacity: 0.5;">
+                            <td style="color: #888;">
+                                <b>${home.team}</b> vs <b>${away.team}</b>
+                                <br/><span style="font-size:9px;color:#ff9800;"><svg width="12" height="12" viewBox="0 0 24 24" fill="#ff9800" style="vertical-align:middle;margin-right:2px;"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg> 3-Way (Draw) - Skipped</span>
+                            </td>
+                            <td style="color:#666">${home.odds || '-'}</td>
+                            <td style="color:#666">${away.odds || '-'}</td>
+                            <td style="color:#666">${stakeHome?.odds || '-'}</td>
+                            <td style="color:#666">${stakeAway?.odds || '-'}</td>
+                            <td colspan="2" style="color:#666">-</td>
+                            <td style="text-align: left;">
+                                <span style="color:#888; font-size:10px;">Skipped (Draw)</span>
+                            </td>
+                        </tr>`;
+                    continue; // Skip to next match
                 }
 
-                // Assign Color & Index
-                matchCounter++;
-                const rowColor = borderColors[(matchCounter - 1) % borderColors.length];
-                const indexBadge = `<span style="font-size:10px; font-weight:bold; color:#fff; background:${rowColor}; padding:1px 5px; border-radius:10px; margin-right:4px;">#${matchCounter}</span>`;
-
-                // Confidence badge with color coding
-                const confColor = matchConfidence >= 80 ? '#27ae60' : (matchConfidence >= 60 ? '#f39c12' : '#e74c3c');
-                const confidenceBadge = `<span style="font-size:9px; font-weight:bold; color:#fff; background:${confColor}; padding:1px 4px; border-radius:8px; margin-left:4px; display:inline-flex; align-items:center; gap:2px;" title="Match Confidence"><svg width="8" height="8" viewBox="0 0 24 24" fill="white" xmlns="http://www.w3.org/2000/svg"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" /></svg>${matchConfidence}%</span>`;
-
-                const rowStyle = `border-left: 4px solid ${rowColor};`;
-
                 if (isSuspended(home.odds) || isSuspended(away.odds) ||
-                    isSuspended(stakeHome.odds) || isSuspended(stakeAway.odds) ||
-                    isSettled(home.odds) || isSettled(away.odds)) {
-
-                    // Determine if it's specifically Settled/Ended
-                    const anySettled = isSettled(home.odds) || isSettled(away.odds);
-                    const statusLabel = anySettled ? 'Ended' : 'Suspended';
-                    const statusColor = anySettled ? '#e74c3c' : '#95a5a6';
-
-                    // Formatting helper
-                    const formatOdds = (val) => {
-                        if (isSettled(val)) return 'Ended';
-                        if (isSuspended(val)) return '-';
-                        return val;
-                    };
+                    isSuspended(stakeHome.odds) || isSuspended(stakeAway.odds)) {
+                    // Suspended Row
+                    const formatOdds = (val) => isSuspended(val) ? '-' : val;
                     const trunc = (str) => str.length > 4 ? str.substring(0, 4) : str;
 
-
-
-                    // Add to highlight list
-                    matchesToHighlight.push(
-                        { team: home.team, type: 'polymarket', color: rowColor, index: matchCounter, link: home.link },
-                        { team: away.team, type: 'polymarket', color: rowColor, index: matchCounter, link: away.link },
-                        { team: stakeHome.team, type: 'stack', color: rowColor, index: matchCounter, link: stakeHome.link },
-                        { team: stakeAway.team, type: 'stack', color: rowColor, index: matchCounter, link: stakeAway.link }
-                    );
-
                     tableHtml += `
-                        <tr style="${rowStyle}">
-                            <td>
-                                ${indexBadge}
-                                <b>${home.team}</b><br/><span style="font-size:9px;color:#aaa">${stakeHome.team}</span>
-                            </td>
-                            <td style="color:${isSuspended(home.odds) || isSettled(home.odds) ? statusColor : 'inherit'}">${formatOdds(home.odds)}</td>
-                            <td style="color:${isSuspended(away.odds) || isSettled(away.odds) ? statusColor : 'inherit'}">${formatOdds(away.odds)}</td>
+                        <tr>
+                            <td><b>${home.team}</b><br/><span style="font-size:9px;color:#aaa">${stakeHome.team}</span></td>
+                            <td style="color:${isSuspended(home.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(home.odds)}</td>
+                            <td style="color:${isSuspended(away.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(away.odds)}</td>
                             <td style="color:${isSuspended(stakeHome.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(stakeHome.odds)}</td>
                             <td style="color:${isSuspended(stakeAway.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(stakeAway.odds)}</td>
-                            <td colspan="2" style="font-size:10px; color:${statusColor}">${statusLabel}</td>
+                            <td colspan="2" style="font-size:10px; color:#95a5a6">-</td>
                              <td style="text-align: left;">
                                 <div style="margin-bottom:2px">
-                                    <button class="bet-btn poly-btn" data-link="${home.link}" data-id="${home.id}" ${anySettled ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : `style="border-right: 5px solid ${rowColor};"`}>P: ${trunc(home.team)}</button>
-                                    <button class="bet-btn poly-btn" data-link="${away.link}" data-id="${away.id}" ${anySettled ? 'disabled style="opacity:0.5; cursor:not-allowed;"' : `style="border-right: 5px solid ${rowColor};"`}>P: ${trunc(away.team)}</button>
+                                    <button class="bet-btn poly-btn" data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn poly-btn" data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
                                 </div>
                                 <div>
-                                    <button class="bet-btn stake-btn" data-link="${stakeHome.link}" style="border-right: 5px solid ${rowColor};">S: ${trunc(stakeHome.team)}</button>
-                                    <button class="bet-btn stake-btn" data-link="${stakeAway.link}" style="border-right: 5px solid ${rowColor};">S: ${trunc(stakeAway.team)}</button>
+                                    <button class="bet-btn stake-btn" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
+                                    <button class="bet-btn stake-btn" data-link="${stakeAway.link}">S: ${trunc(stakeAway.team)}</button>
                                 </div>
                             </td>
                         </tr>`;
@@ -1197,10 +1038,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             s1_away_val = split.stake2;
                             s1_home_disp = `<span class="stake-display">$${split.stake1}</span>`;
                             s1_away_disp = `<span class="stake-display">$${split.stake2}</span>`;
-
+                            
                             // Send Telegram alert for Arb 1
                             sendArbTelegramAlert({
-                                match: `${home.team} vs ${away.team} `,
+                                match: `${home.team} vs ${away.team}`,
                                 polyTeam: home.team,
                                 polyOdds: home.odds,
                                 stakeTeam: stakeAway.team,
@@ -1222,10 +1063,10 @@ document.addEventListener('DOMContentLoaded', () => {
                             s2_away_val = split.stake2;
                             s2_home_disp = `<span class="stake-display">$${split.stake1}</span>`;
                             s2_away_disp = `<span class="stake-display">$${split.stake2}</span>`;
-
+                            
                             // Send Telegram alert for Arb 2
                             sendArbTelegramAlert({
-                                match: `${home.team} vs ${away.team} `,
+                                match: `${home.team} vs ${away.team}`,
                                 polyTeam: away.team,
                                 polyOdds: away.odds,
                                 stakeTeam: stakeHome.team,
@@ -1240,23 +1081,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
 
-                    // CRITICAL FIX: Apple Test Mode Override unconditionally (outside arb check)
-                    if (testMode) {
-                        s1_home_val = testAmount;
-                        s1_away_val = testAmount;
-                        s2_home_val = testAmount;
-                        s2_away_val = testAmount;
-
-                        // Update Displays if they were empty (case: no arb)
-                        // Note: If no arb, split logic above didn't run, so displays are empty strings.
-                        // We should ensure they show the test amount.
-                        const style = 'color:#e67e22; font-weight:bold;';
-                        s1_home_disp = `<span class="stake-display" style="${style}">$${testAmount}</span>`;
-                        s1_away_disp = `<span class="stake-display" style="${style}">$${testAmount}</span>`;
-                        s2_home_disp = `<span class="stake-display" style="${style}">$${testAmount}</span>`;
-                        s2_away_disp = `<span class="stake-display" style="${style}">$${testAmount}</span>`;
-                    }
-
                     // Button Styles
                     // Arb 1 Winner Pair: Poly Home + Stake Away
                     const styleP_Home = arb1.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
@@ -1266,50 +1090,32 @@ document.addEventListener('DOMContentLoaded', () => {
                     const styleP_Away = arb2.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
                     const styleS_Home = arb2.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
 
-                    // Add to highlight list
-                    matchesToHighlight.push(
-                        { team: home.team, type: 'polymarket', color: rowColor, index: matchCounter, link: home.link },
-                        { team: away.team, type: 'polymarket', color: rowColor, index: matchCounter, link: away.link },
-                        { team: stakeHome.team, type: 'stack', color: rowColor, index: matchCounter, link: stakeHome.link },
-                        { team: stakeAway.team, type: 'stack', color: rowColor, index: matchCounter, link: stakeAway.link }
-                    );
-
-                    // Format time for tooltip
-                    const timeTooltip = home.eventTime || stakeHome.eventTime || 'Time N/A';
-                    const isLiveMatch = home.isLive || stakeHome.isLive;
-                    const liveBadge = isLiveMatch ? '<span style="font-size:8px;font-weight:bold;color:#fff;background:#e74c3c;padding:1px 4px;border-radius:4px;margin-left:4px;">LIVE</span>' : '';
-                    const timeDisplay = isLiveMatch ? '' : `<br/><span style="font-size:8px;color:#95a5a6" title="${timeTooltip}">🕐 ${timeTooltip.split(' ').slice(-1)[0] || timeTooltip}</span>`;
-
                     tableHtml += `
-                        <tr style="${rowStyle}" title="Event: ${timeTooltip}">
+                        <tr>
                             <td>
-                                ${indexBadge}
                                 <b>${home.team}</b> vs <b>${away.team}</b>
-                                ${liveBadge}
-                                ${confidenceBadge}
                                 ${home.team !== stakeHome.team ? `<br/><span style="font-size:9px;color:#f39c12">Match: ${stakeHome.team}</span>` : ''}
-                                ${timeDisplay}
                             </td>
                             
-                            <!--Poly Home(Arb 1 Winner ?)-->
+                            <!-- Poly Home (Arb 1 Winner?) -->
                             <td style="${arb1.profit > 0 ? highlightStyle : ''}">
                                 ${home.odds}
                                 ${s1_home_disp}
                             </td>
                             
-                            <!--Poly Away(Arb 2 Winner ?)-->
+                            <!-- Poly Away (Arb 2 Winner?) -->
                             <td style="${arb2.profit > 0 ? highlightStyle : ''}">
                                 ${away.odds}
                                 ${s2_home_disp}
                             </td>
                             
-                            <!--Stake Home(Arb 2 Winner ?)-->
+                            <!-- Stake Home (Arb 2 Winner?) -->
                             <td style="${arb2.profit > 0 ? highlightStyle : ''}">
                                 ${stakeHome.odds}
                                 ${s2_away_disp}
                             </td>
                             
-                            <!--Stake Away(Arb 1 Winner ?)-->
+                            <!-- Stake Away (Arb 1 Winner?) -->
                             <td style="${arb1.profit > 0 ? highlightStyle : ''}">
                                 ${stakeAway.odds}
                                 ${s1_away_disp}
@@ -1319,12 +1125,12 @@ document.addEventListener('DOMContentLoaded', () => {
                             <td class="${arb2.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb2.profit.toFixed(2)}%</td>
                              <td style="text-align: left; min-width: 140px;">
                                 <div style="margin-bottom:3px; display:flex; gap:2px;">
-                                    <button class="bet-btn poly-btn" style="${styleP_Home} border-right: 5px solid ${rowColor};" data-link="${home.link}" data-id="${home.id}" data-stake="${s1_home_val}" data-odds="${home.odds}">P: ${trunc(home.team)}</button>
-                                    <button class="bet-btn poly-btn" style="${styleP_Away} border-right: 5px solid ${rowColor};" data-link="${away.link}" data-id="${away.id}" data-stake="${s2_home_val}" data-odds="${away.odds}">P: ${trunc(away.team)}</button>
+                                    <button class="bet-btn poly-btn" style="${styleP_Home}" data-link="${home.link}" data-id="${home.id}" data-stake="${s1_home_val}" data-odds="${home.odds}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn poly-btn" style="${styleP_Away}" data-link="${away.link}" data-id="${away.id}" data-stake="${s2_home_val}" data-odds="${away.odds}">P: ${trunc(away.team)}</button>
                                 </div>
                                 <div style="display:flex; gap:2px;">
-                                    <button class="bet-btn stake-btn" style="${styleS_Home} border-right: 5px solid ${rowColor};" data-link="${stakeHome.link}" data-stake="${s2_away_val}" data-odds="${stakeHome.odds}">S: ${trunc(stakeHome.team)}</button>
-                                    <button class="bet-btn stake-btn" style="${styleS_Away} border-right: 5px solid ${rowColor};" data-link="${stakeAway.link}" data-stake="${s1_away_val}" data-odds="${stakeAway.odds}">S: ${trunc(stakeAway.team)}</button>
+                                    <button class="bet-btn stake-btn" style="${styleS_Home}" data-link="${stakeHome.link}" data-stake="${s2_away_val}" data-odds="${stakeHome.odds}">S: ${trunc(stakeHome.team)}</button>
+                                    <button class="bet-btn stake-btn" style="${styleS_Away}" data-link="${stakeAway.link}" data-stake="${s1_away_val}" data-odds="${stakeAway.odds}">S: ${trunc(stakeAway.team)}</button>
                                 </div>
                                 <div style="margin-top:4px; text-align:right;">
                                     <button class="debug-btn" data-debug='${JSON.stringify({ home, away, stakeHome, stakeAway })}' style="border:none; background:none; cursor:pointer;" title="Send to TG Debug">
@@ -1338,26 +1144,16 @@ document.addEventListener('DOMContentLoaded', () => {
                         </tr>`;
                 }
 
-
             } else {
                 // PARTIAL or NO MATCH
-                matchCounter++;
-                const rowColor = borderColors[(matchCounter - 1) % borderColors.length];
-                const indexBadge = `<span style="font-size:10px; font-weight:bold; color:#fff; background:${rowColor}; padding:1px 5px; border-radius:10px; margin-right:4px;">#${matchCounter}</span>`;
-                const rowStyle = `border-left: 4px solid ${rowColor};`;
-
-                // Add to highlight list (Partial)
-                matchesToHighlight.push(
-                    { team: home.team, type: 'polymarket', color: rowColor, index: matchCounter, link: home.link },
-                    { team: away.team, type: 'polymarket', color: rowColor, index: matchCounter, link: away.link }
-                );
-                if (stakeHome) matchesToHighlight.push({ team: stakeHome.team, type: 'stack', color: rowColor, index: matchCounter, link: stakeHome.link });
-                if (stakeAway) matchesToHighlight.push({ team: stakeAway.team, type: 'stack', color: rowColor, index: matchCounter, link: stakeAway.link });
+                // ... (Keep existing partial logic)
+                const sH = stakeHome ? stakeHome.team : null;
+                const sA = stakeAway ? stakeAway.team : null;
+                const trunc = (str) => str && str.length > 4 ? str.substring(0, 4) : (str || '');
 
                 tableHtml += `
-                    <tr style="${rowStyle}">
+                    <tr>
                         <td>
-                            ${indexBadge}
                             <b>${home.team}</b> vs <b>${away.team}</b>
                         </td>
                         <td>${home.odds}</td>
@@ -1368,38 +1164,19 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td style="color:#aaa">-</td>
                          <td style="text-align: left;">
                             <div style="margin-bottom:2px">
-                                <button class="bet-btn poly-btn" data-link="${home.link}" data-id="${home.id}" style="border-right: 5px solid ${rowColor};">P: ${trunc(home.team)}</button>
-                                <button class="bet-btn poly-btn" data-link="${away.link}" data-id="${away.id}" style="border-right: 5px solid ${rowColor};">P: ${trunc(away.team)}</button>
+                                <button class="bet-btn poly-btn" data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
+                                <button class="bet-btn poly-btn" data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
                             </div>
                             ${stakeHome ? `
                             <div>
-                                <button class="bet-btn stake-btn" data-link="${stakeHome.link}" style="border-right: 5px solid ${rowColor};">S: ${trunc(stakeHome.team)}</button>
-                                <button class="bet-btn stake-btn" data-link="${stakeAway ? stakeAway.link : ''}" style="border-right: 5px solid ${rowColor};">S: ${trunc(stakeAway ? stakeAway.team : '')}</button>
+                                <button class="bet-btn stake-btn" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
+                                <button class="bet-btn stake-btn" data-link="${stakeAway ? stakeAway.link : ''}">S: ${trunc(stakeAway ? stakeAway.team : '')}</button>
                             </div>` : ''}
                         </td>
                     </tr>
-            `;
+                 `;
             }
         }
-
-        // Send Highlight Message to Content Script (if enabled)
-        chrome.storage.local.get(['highlightEnabled'], (result) => {
-            const highlightEnabled = result.highlightEnabled !== false; // Default true
-            if (!highlightEnabled) return; // Skip if disabled
-
-            chrome.tabs.query({}, (tabs) => {
-                tabs.forEach(tab => {
-                    if (tab.url && (tab.url.includes('stake') || tab.url.includes('polymarket') || tab.url.includes('sx.bet'))) {
-                        try {
-                            chrome.tabs.sendMessage(tab.id, {
-                                action: "highlight_odds",
-                                targets: matchesToHighlight
-                            });
-                        } catch (e) { /* ignore */ }
-                    }
-                });
-            });
-        });
 
         tableHtml += '</tbody></table>';
         return tableHtml;
@@ -1415,7 +1192,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     ${res.profit}%
                 </td>
             </tr>
-            `;
+        `;
     }
 
     // --- Monitoring Logic ---
@@ -1470,7 +1247,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const remaining = 10 - diff;
 
                 if (remaining >= 0) {
-                    if (timerDisplay) timerDisplay.textContent = `Next scan in: ${remaining} s`;
+                    if (timerDisplay) timerDisplay.textContent = `Next scan in: ${remaining}s`;
                 } else {
                     if (timerDisplay) timerDisplay.textContent = "Scanning...";
                 }
@@ -1540,76 +1317,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Auto-Update UI when storage changes
+    // Auto-Update UI when storage changes (Monitoring)
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace === 'local') {
-            if (changes.polymarketData || changes.stackData || changes.strictMatch || changes.stakeAmount || changes.aiEnabled) {
+            if (changes.polymarketData || changes.stackData || changes.strictMatch) {
                 updateUI();
             }
         }
     });
-
-    // --- AI & Stake Control Logic ---
-    const toggleAI = document.getElementById('toggleAI');
-    const aiStatusLabel = document.getElementById('aiStatusLabel');
-    if (toggleAI) {
-        // Load AI State
-        chrome.storage.local.get(['aiEnabled'], (res) => {
-            const isActive = res.aiEnabled !== false; // Default true?
-            // Actually user asked to "turn on", implies default might be OFF or "turnable".
-            // Let's stick to reading storage. If undefined, maybe default to false to be safe?
-            toggleAI.checked = !!res.aiEnabled;
-            if (aiStatusLabel) aiStatusLabel.style.color = toggleAI.checked ? '#27ae60' : '#95a5a6';
-        });
-
-        toggleAI.addEventListener('change', () => {
-            const isActive = toggleAI.checked;
-            if (aiStatusLabel) aiStatusLabel.style.color = isActive ? '#27ae60' : '#95a5a6';
-            chrome.storage.local.set({ aiEnabled: isActive });
-        });
-    }
-
-    const mainStakeInput = document.getElementById('mainStakeInput');
-    if (mainStakeInput) {
-        // Load Stake
-        chrome.storage.local.get(['stakeAmount'], (res) => {
-            mainStakeInput.value = res.stakeAmount || 100;
-        });
-
-        mainStakeInput.addEventListener('change', () => {
-            const val = parseFloat(mainStakeInput.value);
-            if (!isNaN(val) && val > 0) {
-                chrome.storage.local.set({ stakeAmount: val });
-            }
-        });
-    }
-
-    // --- Test Mode Logic ---
-    const toggleTestMode = document.getElementById('toggleTestMode');
-    const testAmountInput = document.getElementById('testAmountInput');
-
-    if (toggleTestMode && testAmountInput) {
-        chrome.storage.local.get(['testModeEnabled', 'testAmount'], (res) => {
-            toggleTestMode.checked = !!res.testModeEnabled;
-            testAmountInput.value = res.testAmount || 1;
-            updateUI(); // Refresh UI state based on loaded values
-        });
-
-        toggleTestMode.addEventListener('change', () => {
-            const isActive = toggleTestMode.checked;
-            chrome.storage.local.set({ testModeEnabled: isActive });
-            updateUI();
-        });
-
-        testAmountInput.addEventListener('input', () => {
-            const val = parseFloat(testAmountInput.value);
-            if (!isNaN(val) && val > 0) {
-                chrome.storage.local.set({ testAmount: val });
-                updateUI();
-            }
-        });
-    }
-
     // --- Settings Toggle Logic ---
     const settingsToggleBtn = document.getElementById('settingsToggleBtn');
     const settingsContainer = document.getElementById('settingsContainer');
@@ -1636,45 +1351,43 @@ document.addEventListener('DOMContentLoaded', () => {
     const testTgBtn = document.getElementById('testTgBtn');
 
     // Load Settings
-    chrome.storage.local.get(['tgBotToken', 'tgChatId', 'maxPayroll', 'stakeAmount', 'maxTrades', 'retryCount', 'autoTradeEnabled', 'tgTradeEnabled', 'geminiApiKey'], (res) => {
-        if (res.tgBotToken) document.getElementById('tgBotToken').value = res.tgBotToken;
-        if (res.tgChatId) document.getElementById('tgChatId').value = res.tgChatId;
-        if (res.geminiApiKey) document.getElementById('geminiApiKey').value = res.geminiApiKey;
-        if (res.maxPayroll) document.getElementById('maxPayroll').value = res.maxPayroll;
-        if (res.stakeAmount) document.getElementById('stakeAmount').value = res.stakeAmount;
-        if (res.maxTrades) document.getElementById('maxTrades').value = res.maxTrades;
-        if (res.retryCount) document.getElementById('retryCount').value = res.retryCount;
-        document.getElementById('autoTradeToggle').checked = res.autoTradeEnabled || false;
-        document.getElementById('tgTradeToggle').checked = res.tgTradeEnabled || false;
+    chrome.storage.local.get([
+        'tgBotToken', 'tgChatId', 'maxPayroll', 'stakeAmount', 'maxTrades', 'retryCount',
+        'autoTradeEnabled', 'tgTradeEnabled'
+    ], (result) => {
+        if (result.tgBotToken) tgBotTokenInput.value = result.tgBotToken;
+        if (result.tgChatId) tgChatIdInput.value = result.tgChatId;
+        if (result.maxPayroll) maxPayrollInput.value = result.maxPayroll;
+        if (result.stakeAmount) stakeAmountInput.value = result.stakeAmount;
+        if (result.maxTrades) maxTradesInput.value = result.maxTrades;
+        retryCountInput.value = result.retryCount || 1; // Default 1
+        if (result.autoTradeEnabled) autoTradeToggle.checked = result.autoTradeEnabled;
+        if (result.tgTradeEnabled) tgTradeToggle.checked = result.tgTradeEnabled;
     });
 
-    // Save Settings
-    document.getElementById('saveSettingsBtn').addEventListener('click', () => {
-        const token = document.getElementById('tgBotToken').value.trim();
-        const chat = document.getElementById('tgChatId').value.trim();
-        const geminiKey = document.getElementById('geminiApiKey').value.trim();
-        const maxPayroll = parseFloat(document.getElementById('maxPayroll').value) || 1000;
-        const stakeAmt = parseFloat(document.getElementById('stakeAmount').value) || 100;
-        const maxTrades = parseInt(document.getElementById('maxTrades').value) || 1;
-        const retryCount = parseInt(document.getElementById('retryCount').value) || 1;
-        const autoTrade = document.getElementById('autoTradeToggle').checked;
-        const tgTrade = document.getElementById('tgTradeToggle').checked;
+    // Save Settings Handler
+    saveSettingsBtn.addEventListener('click', () => {
+        const settings = {
+            tgBotToken: tgBotTokenInput.value.trim(),
+            tgChatId: tgChatIdInput.value.trim(),
+            maxPayroll: parseFloat(maxPayrollInput.value) || 0,
+            stakeAmount: parseFloat(stakeAmountInput.value) || 0,
+            maxTrades: parseInt(maxTradesInput.value) || 0,
+            retryCount: parseInt(retryCountInput.value) || 1, // Default 1
+            autoTradeEnabled: autoTradeToggle.checked,
+            tgTradeEnabled: tgTradeToggle.checked,
+            blockedFunds: 0, // Reset blocked funds on save
+            tradeCount: 0 // Reset session trade count
+        };
 
-        chrome.storage.local.set({
-            tgBotToken: token,
-            tgChatId: chat,
-            geminiApiKey: geminiKey,
-            maxPayroll: maxPayroll,
-            stakeAmount: stakeAmt,
-            maxTrades: maxTrades,
-            retryCount: retryCount,
-            autoTradeEnabled: autoTrade,
-            tgTradeEnabled: tgTrade,
-            blockedFunds: 0, // Reset blocked funds
-            dailyTradeCount: 0
-        }, () => {
-            alert("Settings Saved & Limits Reset!");
-            document.getElementById('settingsContainer').style.display = 'none';
+        chrome.storage.local.set(settings, () => {
+            const originalText = saveSettingsBtn.textContent;
+            saveSettingsBtn.textContent = "Saved & Reset!";
+            saveSettingsBtn.style.backgroundColor = "#2ecc71";
+            setTimeout(() => {
+                saveSettingsBtn.textContent = originalText;
+                saveSettingsBtn.style.backgroundColor = "#27ae60";
+            }, 1500);
         });
     });
 
@@ -1719,6 +1432,164 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Save Settings
+    if (saveSettingsBtn) {
+        saveSettingsBtn.addEventListener('click', () => {
+            const settings = {
+                tgBotToken: tgBotTokenInput.value.trim(),
+                tgChatId: tgChatIdInput.value.trim(),
+                maxPayroll: parseFloat(maxPayrollInput.value) || 0,
+                stakeAmount: parseFloat(stakeAmountInput.value) || 0,
+                maxTrades: parseInt(maxTradesInput.value) || 0,
+                autoTradeEnabled: autoTradeToggle.checked,
+                tgTradeEnabled: tgTradeToggle.checked,
+                blockedFunds: 0, // Reset blocked funds
+                tradeCount: 0    // Reset trade count
+            };
 
+            chrome.storage.local.set(settings, () => {
+                const originalText = saveSettingsBtn.textContent;
+                saveSettingsBtn.textContent = "Saved! Funds & Count Reset.";
+                saveSettingsBtn.style.backgroundColor = "#27ae60"; // Green
+
+                setTimeout(() => {
+                    saveSettingsBtn.textContent = originalText;
+                    saveSettingsBtn.style.backgroundColor = "#3498db"; // Reset to original blue or similar
+                }, 1500);
+
+                // Update UI immediately (optional, but good for feedback)
+                updateUI();
+            });
+        });
+    }
+
+    // --- Bet History Section ---
+    const historyToggleBtn = document.getElementById('historyToggleBtn');
+    const historyList = document.getElementById('historyList');
+    const historyActions = document.getElementById('historyActions');
+    const historyBadge = document.getElementById('historyBadge');
+    const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+
+    function formatDuration(ms) {
+        if (!ms) return '-';
+        if (ms >= 1000) {
+            return `${(ms / 1000).toFixed(2)}s`;
+        }
+        return `${ms}ms`;
+    }
+
+    function renderBetHistory() {
+        chrome.storage.local.get(['betHistory'], (result) => {
+            const history = result.betHistory || [];
+            
+            // Update badge
+            if (historyBadge) {
+                historyBadge.textContent = history.length;
+                historyBadge.style.background = history.length > 0 ? '#27ae60' : '#95a5a6';
+            }
+            
+            if (!historyList) return;
+            
+            if (history.length === 0) {
+                historyList.innerHTML = '<p style="text-align: center; color: #999; font-size: 11px; padding: 10px;">No bets yet</p>';
+                return;
+            }
+            
+            // SVG Icons
+            const icons = {
+                check: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align: middle;"><path d="M20 6L9 17l-5-5" stroke="#27ae60" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+                pending: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align: middle;"><circle cx="12" cy="12" r="10" stroke="#f39c12" stroke-width="2"/><path d="M12 6v6l4 2" stroke="#f39c12" stroke-width="2" stroke-linecap="round"/></svg>`,
+                failed: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" style="vertical-align: middle;"><circle cx="12" cy="12" r="10" stroke="#e74c3c" stroke-width="2"/><path d="M15 9l-6 6M9 9l6 6" stroke="#e74c3c" stroke-width="2" stroke-linecap="round"/></svg>`,
+                money: `<svg width="12" height="12" viewBox="0 0 24 24" fill="#27ae60" style="vertical-align: middle;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1.41 16.09V20h-2.67v-1.93c-1.71-.36-3.16-1.46-3.27-3.4h1.96c.1 1.05.82 1.87 2.65 1.87 1.96 0 2.4-.98 2.4-1.59 0-.83-.44-1.61-2.67-2.14-2.48-.6-4.18-1.62-4.18-3.67 0-1.72 1.39-2.84 3.11-3.21V4h2.67v1.95c1.86.45 2.79 1.86 2.85 3.39H14.3c-.05-1.11-.64-1.87-2.22-1.87-1.5 0-2.4.68-2.4 1.64 0 .84.65 1.39 2.67 1.91s4.18 1.39 4.18 3.91c-.01 1.83-1.38 2.83-3.12 3.16z"/></svg>`,
+                timer: `<svg width="12" height="12" viewBox="0 0 24 24" fill="#3498db" style="vertical-align: middle;"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/></svg>`,
+                payout: `<svg width="12" height="12" viewBox="0 0 24 24" fill="#27ae60" style="vertical-align: middle;"><path d="M11.8 10.9c-2.27-.59-3-1.2-3-2.15 0-1.09 1.01-1.85 2.7-1.85 1.78 0 2.44.85 2.5 2.1h2.21c-.07-1.72-1.12-3.3-3.21-3.81V3h-3v2.16c-1.94.42-3.5 1.68-3.5 3.61 0 2.31 1.91 3.46 4.7 4.13 2.5.6 3 1.48 3 2.41 0 .69-.49 1.79-2.7 1.79-2.06 0-2.87-.92-2.98-2.1h-2.2c.12 2.19 1.76 3.42 3.68 3.83V21h3v-2.15c1.95-.37 3.5-1.5 3.5-3.55 0-2.84-2.43-3.81-4.7-4.4z"/></svg>`,
+                warning: `<svg width="12" height="12" viewBox="0 0 24 24" fill="#e74c3c" style="vertical-align: middle;"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>`,
+                refresh: `<svg width="12" height="12" viewBox="0 0 24 24" fill="#f39c12" style="vertical-align: middle;"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>`
+            };
+            
+            let html = '';
+            history.slice(0, 20).forEach((bet, idx) => {
+                let statusIcon, statusColor, statusBg;
+                
+                switch(bet.status) {
+                    case 'COMPLETED':
+                    case 'SUCCESS':
+                        statusIcon = icons.check;
+                        statusColor = '#27ae60';
+                        statusBg = '';
+                        break;
+                    case 'PENDING':
+                        statusIcon = icons.pending;
+                        statusColor = '#f39c12';
+                        statusBg = 'background: linear-gradient(90deg, #fff9e6 0%, #fff 100%);';
+                        break;
+                    case 'ERROR':
+                        statusIcon = icons.warning;
+                        statusColor = '#e67e22';
+                        statusBg = 'background: linear-gradient(90deg, #fff5e6 0%, #fff 100%);';
+                        break;
+                    case 'FAILED':
+                    default:
+                        statusIcon = icons.failed;
+                        statusColor = '#e74c3c';
+                        statusBg = '';
+                }
+                
+                const time = new Date(bet.timestamp).toLocaleTimeString();
+                const date = new Date(bet.timestamp).toLocaleDateString();
+                
+                html += `
+                    <div style="padding: 8px; border-bottom: 1px solid #eee; font-size: 11px; ${statusBg || (idx % 2 === 0 ? 'background: #f9f9f9;' : '')}">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="font-weight: bold; color: ${statusColor};">${statusIcon} ${bet.team || 'Unknown'}</span>
+                            <span style="color: #666; font-size: 10px;">${time}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-top: 4px; color: #555;">
+                            <span>${icons.money} $${bet.amount || '0'} @ ${bet.odds || '-'}</span>
+                            ${bet.status === 'PENDING' 
+                                ? `<span style="color: #f39c12; font-weight: bold;">${icons.pending} Processing...</span>`
+                                : `<span style="color: #3498db; font-weight: bold;">${icons.timer} ${formatDuration(bet.duration)}</span>`
+                            }
+                        </div>
+                        ${bet.payout ? `<div style="color: #27ae60; margin-top: 2px;">${icons.payout} Payout: $${bet.payout}</div>` : ''}
+                        ${bet.reason ? `<div style="color: #e74c3c; margin-top: 2px; font-size: 10px;">${icons.warning} ${bet.reason}</div>` : ''}
+                        ${bet.status === 'PENDING' ? `<div style="color: #f39c12; margin-top: 2px; font-size: 10px;">${icons.refresh} Waiting for green checkmark confirmation...</div>` : ''}
+                    </div>
+                `;
+            });
+            
+            historyList.innerHTML = html;
+        });
+    }
+
+    // Toggle history panel
+    if (historyToggleBtn) {
+        historyToggleBtn.addEventListener('click', () => {
+            const isHidden = historyList.style.display === 'none';
+            historyList.style.display = isHidden ? 'block' : 'none';
+            if (historyActions) historyActions.style.display = isHidden ? 'block' : 'none';
+            if (isHidden) renderBetHistory();
+        });
+    }
+
+    // Clear history button
+    if (clearHistoryBtn) {
+        clearHistoryBtn.addEventListener('click', () => {
+            if (confirm('Clear all bet history?')) {
+                chrome.storage.local.set({ betHistory: [] }, () => {
+                    renderBetHistory();
+                });
+            }
+        });
+    }
+
+    // Listen for bet history updates
+    chrome.storage.onChanged.addListener((changes, namespace) => {
+        if (namespace === 'local' && changes.betHistory) {
+            renderBetHistory();
+        }
+    });
+
+    // Initial render
+    renderBetHistory();
 
 });
