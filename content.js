@@ -1,13 +1,43 @@
+// Inject CSS for team highlighting
+(function injectHighlightStyles() {
+    if (document.getElementById('arb-highlight-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'arb-highlight-styles';
+    style.textContent = `
+        [data-arb-highlight="team1"] {
+            border: 3px solid #e91e63 !important;
+            box-shadow: 0 0 15px rgba(233, 30, 99, 0.6), 0 0 25px rgba(233, 30, 99, 0.4) !important;
+            background-color: rgba(233, 30, 99, 0.1) !important;
+            transition: all 0.3s ease !important;
+        }
+        [data-arb-highlight="team2"] {
+            border: 3px solid #ff9800 !important;
+            box-shadow: 0 0 15px rgba(255, 152, 0, 0.6), 0 0 25px rgba(255, 152, 0, 0.4) !important;
+            background-color: rgba(255, 152, 0, 0.1) !important;
+            transition: all 0.3s ease !important;
+        }
+        [data-arb-highlight="arb1"] {
+            border: 3px solid #e91e63 !important;
+            box-shadow: 0 0 15px rgba(0, 230, 118, 0.8), 0 0 30px rgba(0, 230, 118, 0.5) !important;
+            background-color: rgba(233, 30, 99, 0.15) !important;
+            animation: arbPulse 1.5s ease-in-out infinite !important;
+        }
+        [data-arb-highlight="arb2"] {
+            border: 3px solid #ff9800 !important;
+            box-shadow: 0 0 15px rgba(0, 230, 118, 0.8), 0 0 30px rgba(0, 230, 118, 0.5) !important;
+            background-color: rgba(255, 152, 0, 0.15) !important;
+            animation: arbPulse 1.5s ease-in-out infinite !important;
+        }
+        @keyframes arbPulse {
+            0%, 100% { box-shadow: 0 0 15px rgba(0, 230, 118, 0.8), 0 0 30px rgba(0, 230, 118, 0.5); }
+            50% { box-shadow: 0 0 25px rgba(0, 230, 118, 1), 0 0 45px rgba(0, 230, 118, 0.7); }
+        }
+    `;
+    document.head.appendChild(style);
+})();
+
 // Expose to window
 window.scrapePageData = scrapePageData;
-
-// Debug function to see what's being scraped
-window.debugScrape = function() {
-    const data = scrapePageData();
-    console.log('[DEBUG] Scraped Data:', JSON.stringify(data, null, 2));
-    console.log('[DEBUG] Teams found:', data.odds.map(o => `${o.team} @ ${o.odds}`).join(', '));
-    return data;
-};
 
 // --- ROBUST SCRAPER (Ported from Background) ---
 function scrapePageData() {
@@ -24,25 +54,11 @@ function scrapePageData() {
             return cents > 0 ? (100 / cents).toFixed(2) : null;
         }
 
-        // 2. Try Decimal (e.g. 1.28, 1.85)
-        // If it's already a decimal odds value (typically 1.01 to 100.00)
-        const matchDecimal = str.match(/(\d+\.\d+)/);
+        // 2. Try Decimal (e.g. 1.28)
+        // Look for typical decimal odds format: digit(s) dot digit(s)
+        const matchDecimal = str.match(/(\d+\.\d{2})/);
         if (matchDecimal) {
-            const val = parseFloat(matchDecimal[1]);
-            // If value looks like decimal odds (1.01 to 100), return as-is
-            // If it looks like cents converted wrongly (0.xx), convert
-            if (val >= 1.01 && val <= 100) {
-                return val;
-            }
-        }
-
-        // 3. Try plain integer as cents (e.g., "52" means 52 cents)
-        const matchInt = str.match(/^(\d+)$/);
-        if (matchInt) {
-            const cents = parseInt(matchInt[1], 10);
-            if (cents > 0 && cents <= 100) {
-                return (100 / cents).toFixed(2);
-            }
+            return parseFloat(matchDecimal[1]);
         }
 
         return null;
@@ -65,259 +81,90 @@ function scrapePageData() {
     };
 
     // 1. Polymarket Scraper
-    // Group by match/event container first
-    const polyMarketContainers = document.querySelectorAll('a[href*="/event/"]');
-    if (polyMarketContainers.length > 0) {
+    const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+    if (polyButtons.length > 0) {
         data.type = 'polymarket';
-        
-        polyMarketContainers.forEach(container => {
-            const buttons = container.querySelectorAll('button.trading-button, button[class*="trading-button"]');
-            const matchTeams = [];
-            
-            // Try to get full team names from the row/container (not just button labels)
-            // Look for team names in the match row - they appear as text before the buttons
-            const fullTeamNames = [];
-            
-            // Look for team name elements in the container (outside buttons)
-            // These often have score indicators (0, 1, etc.) next to them
-            const textNodes = container.querySelectorAll('span, div, p');
-            textNodes.forEach(node => {
-                // Skip if it's inside a button
-                if (node.closest('button')) return;
-                
-                const text = node.textContent.trim();
-                // Look for team names - they're usually longer text that isn't a number/score
-                // Avoid things like "LIVE", "Game 2", scores, etc.
-                if (text.length >= 3 && 
-                    !/^(LIVE|Game \d|Best of \d|\$[\d.]+k|Vol\.|Game View|Load More|\d+)$/i.test(text) &&
-                    !/^\d+\.\d+$/.test(text) &&
-                    !text.includes('¢')) {
-                    
-                    // Check if this looks like a team name (has letters)
-                    if (/[A-Za-z]{2,}/.test(text) && text.length <= 50) {
-                        fullTeamNames.push(text.toUpperCase());
-                    }
-                }
-            });
-            
-            buttons.forEach((btn, btnIndex) => {
-                let team = 'UNKNOWN';
-                let fullTeam = null;
-                
-                // Get short team name from button's .opacity-70
-                const teamNode = btn.querySelector('.opacity-70');
-                let shortName = '';
-                if (teamNode) {
-                    let rawTeam = teamNode.textContent.trim().toUpperCase();
-                    
-                    // Aggressive cleaning for team names:
-                    rawTeam = rawTeam.replace(/\d+\.\d+/g, '').trim();
-                    rawTeam = rawTeam.replace(/\d+¢/g, '').trim();
-                    rawTeam = rawTeam.replace(/\s+\d{1,3}$/g, '').trim();
-                    if (/^\d+/.test(rawTeam)) {
-                        const numParts = rawTeam.split(/\s+/);
-                        if (numParts.length >= 2 && /^\d+$/.test(numParts[0]) && /^\d+$/.test(numParts[1])) {
-                            rawTeam = numParts[0];
+        polyButtons.forEach(btn => {
+            let team = 'UNKNOWN';
+            const teamNode = btn.querySelector('.opacity-70');
+            if (teamNode) {
+                team = teamNode.textContent.trim().toUpperCase();
+            } else {
+                const txt = btn.textContent.trim();
+                const match = txt.match(/^([A-Z]{3})/);
+                if (match) team = match[1];
+
+                // Improved Name Extraction (Same as popup fallback)
+                // Fix for "33 33" -> "33"
+                if (team === 'UNKNOWN' || team.length <= 4) {
+                    const linkEl = btn.closest('a');
+                    if (linkEl) {
+                        const fullText = linkEl.textContent.trim().toUpperCase();
+                        let btnText = btn.textContent.trim().toUpperCase();
+
+                        // If btnText is "33 79¢ 1.27", we only want to remove odds
+                        // Clean fullText: "33 33" -> we want "33"
+                        // Or if page says "33 33", it's the name twice?
+
+                        let cleanName = fullText.replace(btnText, '').trim();
+                        // Remove odds if leaked
+                        cleanName = cleanName.replace(/\d+\s*¢/g, '').replace(/(\d+\.\d{2})/g, '').trim();
+
+                        // Special case for repeated numeric names "33 33"
+                        const tokens = cleanName.split(' ');
+                        if (tokens.length === 2 && tokens[0] === tokens[1]) {
+                            cleanName = tokens[0];
                         }
-                    }
-                    const parts = rawTeam.split(/\s+/);
-                    if (parts.length === 2 && parts[0] === parts[1]) {
-                        rawTeam = parts[0];
-                    }
-                    
-                    shortName = rawTeam;
-                    team = rawTeam;
-                }
-                
-                // Try to find matching full team name from the container
-                // The full name should START with the short button name
-                if (shortName && fullTeamNames.length > 0) {
-                    for (const fullName of fullTeamNames) {
-                        // Check if full name starts with short name or contains it prominently
-                        if (fullName.startsWith(shortName) || 
-                            fullName.includes(shortName + ' ') ||
-                            fullName.split(/\s+/)[0] === shortName) {
-                            fullTeam = fullName;
-                            break;
+
+                        if (cleanName.length >= 1) { // Allow short names like "33"
+                            team = cleanName;
                         }
                     }
                 }
-                
-                // Use full team name if found, otherwise fall back to short name
-                if (fullTeam) {
-                    team = fullTeam;
-                }
-                
-                // Get odds - try multiple approaches
-                let odds = null;
-                
-                // Method 1: Direct odds span with .ml-1 class (new Polymarket format)
-                const oddsSpan = btn.querySelector('.ml-1, [class*="ml-1"]');
-                if (oddsSpan) {
-                    const oddsText = oddsSpan.textContent.trim();
-                    odds = parsePolyOdds(oddsText);
-                }
-                
-                // Method 2: Fallback - clone and remove team element
-                if (!odds) {
-                    const clone = btn.cloneNode(true);
-                    const tags = clone.querySelectorAll('.odds-converted-tag');
-                    tags.forEach(t => t.remove());
-                    const teamEl = clone.querySelector('.opacity-70');
-                    if (teamEl) teamEl.remove();
-                    
-                    const rawText = clone.textContent.trim();
-                    odds = parsePolyOdds(rawText);
-                }
-                
-                if (team && team !== 'UNKNOWN' && team.length > 0 && odds) {
-                    matchTeams.push({
-                        team,
-                        odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
-                        source: 'Poly',
-                        link: container.href || window.location.href,
-                        id: btn.id
-                    });
-                }
-            });
-            
-            // Add teams from this match to data
-            // This keeps teams from the same match together
-            matchTeams.forEach(t => data.odds.push(t));
+            }
+
+            const clone = btn.cloneNode(true);
+            const tags = clone.querySelectorAll('.odds-converted-tag');
+            tags.forEach(t => t.remove());
+            const teamEl = clone.querySelector('.opacity-70');
+            if (teamEl) teamEl.remove();
+
+            const rawText = clone.textContent.trim();
+            const odds = parsePolyOdds(rawText);
+
+            // Get Link
+            const linkEl = btn.closest('a');
+            const link = linkEl ? linkEl.href : window.location.href;
+
+            if (team !== 'UNKNOWN' && odds) {
+                data.odds.push({
+                    team,
+                    odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
+                    source: 'Poly',
+                    link: link,
+                    id: btn.id // Capture ID
+                });
+            }
         });
-    }
-    
-    // Fallback: Original button-based scraper if no containers found
-    if (data.odds.length === 0) {
-        const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
-        if (polyButtons.length > 0) {
-            data.type = 'polymarket';
-            polyButtons.forEach(btn => {
-                let team = 'UNKNOWN';
-                
-                // Get team name from .opacity-70
-                const teamNode = btn.querySelector('.opacity-70');
-                if (teamNode) {
-                    let rawTeam = teamNode.textContent.trim().toUpperCase();
-                    
-                    // Aggressive cleaning for team names:
-                    rawTeam = rawTeam.replace(/\d+\.\d+/g, '').trim();
-                    rawTeam = rawTeam.replace(/\d+¢/g, '').trim();
-                    rawTeam = rawTeam.replace(/\s+\d{1,3}$/g, '').trim();
-                    if (/^\d+/.test(rawTeam)) {
-                        const numParts = rawTeam.split(/\s+/);
-                        if (numParts.length >= 2 && /^\d+$/.test(numParts[0]) && /^\d+$/.test(numParts[1])) {
-                            rawTeam = numParts[0];
-                        }
-                    }
-                    const parts = rawTeam.split(/\s+/);
-                    if (parts.length === 2 && parts[0] === parts[1]) {
-                        rawTeam = parts[0];
-                    }
-                    
-                    team = rawTeam;
-                }
-                
-                // Get odds - try multiple approaches
-                let odds = null;
-                
-                // Method 1: Direct odds span with .ml-1 class
-                const oddsSpan = btn.querySelector('.ml-1, [class*="ml-1"]');
-                if (oddsSpan) {
-                    const oddsText = oddsSpan.textContent.trim();
-                    odds = parsePolyOdds(oddsText);
-                }
-                
-                // Method 2: Fallback - clone and remove team element
-                if (!odds) {
-                    const clone = btn.cloneNode(true);
-                    const tags = clone.querySelectorAll('.odds-converted-tag');
-                    tags.forEach(t => t.remove());
-                    const teamEl = clone.querySelector('.opacity-70');
-                    if (teamEl) teamEl.remove();
-                    
-                    const rawText = clone.textContent.trim();
-                    odds = parsePolyOdds(rawText);
-                }
-
-                const linkEl = btn.closest('a');
-                const link = linkEl ? linkEl.href : window.location.href;
-
-                if (team !== 'UNKNOWN' && odds) {
-                    data.odds.push({
-                        team,
-                        odds: odds === 'Suspended' ? 'Suspended' : parseFloat(odds),
-                        source: 'Poly',
-                        link: link,
-                        id: btn.id
-                    });
-                }
-            });
-        }
     }
 
     // 2. Stake/SX Scraper
     if (data.odds.length === 0) {
-        // Try multiple selector strategies for Stake
-        let stackItems = document.querySelectorAll('.outcome-content');
-        
-        // Alternative selectors if main one doesn't find items
-        if (stackItems.length === 0) {
-            stackItems = document.querySelectorAll('[data-testid="outcome-button"]');
-        }
-        if (stackItems.length === 0) {
-            stackItems = document.querySelectorAll('.outcome-button');
-        }
-        
+        const stackItems = document.querySelectorAll('.outcome-content');
         if (stackItems.length > 0) {
             data.type = 'stack';
             stackItems.forEach(item => {
-                // Try multiple ways to get team name
-                let nameEl = item.querySelector('[data-testid="outcome-button-name"]');
-                if (!nameEl) {
-                    nameEl = item.querySelector('.outcome-name, .team-name, [class*="name"]');
-                }
-                
-                // Also check the button text directly
-                let team = 'UNKNOWN';
-                if (nameEl) {
-                    team = nameEl.textContent.trim().toUpperCase();
-                } else {
-                    // Try to get name from the item itself
-                    const btn = item.closest('button') || item;
-                    const allText = btn.innerText || btn.textContent;
-                    const lines = allText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-                    
-                    // First non-numeric line is likely the team name
-                    for (const line of lines) {
-                        // Skip if it looks like odds
-                        if (/^\d+\.\d+$/.test(line)) continue;
-                        if (line.length >= 2 && line.length <= 30) {
-                            team = line.toUpperCase();
-                            break;
-                        }
-                    }
-                }
-                
-                // Get odds
-                let oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
-                if (!oddsContainer) {
-                    oddsContainer = item.querySelector('.odds, [class*="odds"]');
-                }
-                
+                const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
+                const oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
+
+                const team = nameEl ? nameEl.textContent.trim().toUpperCase() : 'UNKNOWN';
                 let odds = null;
+
                 if (oddsContainer) {
                     odds = parseStakeOdds(oddsContainer.textContent);
                 } else {
-                    // Try to find odds in the button
-                    const btn = item.closest('button') || item;
-                    const text = btn.textContent;
-                    const oddsMatch = text.match(/(\d+\.\d{2})/);
-                    if (oddsMatch) {
-                        odds = parseFloat(oddsMatch[1]);
-                    } else {
-                        if (btn.disabled) odds = 'Suspended';
-                    }
+                    const btn = item.closest('button');
+                    if (btn && btn.disabled) odds = 'Suspended';
                 }
 
                 // Time Extraction
@@ -362,7 +209,86 @@ function scrapePageData() {
         }
     }
 
+    // Auto-highlight team buttons on scrape
+    autoHighlightTeams(data);
+
     return data;
+}
+
+// Clear all highlights including data attributes and inline styles
+let highlightEnabled = true; // Global flag for highlight state
+
+function clearAllHighlights() {
+    console.log('[Auto] Clearing all highlights...');
+    
+    // Remove data-arb-highlight attributes
+    document.querySelectorAll('[data-arb-highlight]').forEach(el => {
+        el.removeAttribute('data-arb-highlight');
+        // Also remove any stored outline
+        if (el.dataset.origOutline !== undefined) {
+            el.style.outline = el.dataset.origOutline || '';
+            delete el.dataset.origOutline;
+        }
+    });
+    
+    // Remove inline highlight styles from inputs
+    document.querySelectorAll('input').forEach(input => {
+        if (input.dataset.originalBorder !== undefined) {
+            input.style.border = input.dataset.originalBorder || '';
+            input.style.boxShadow = input.dataset.originalBoxShadow || '';
+            delete input.dataset.originalBorder;
+            delete input.dataset.originalBoxShadow;
+        }
+        // Also clear green/pink borders we added
+        if (input.style.border && (input.style.border.includes('rgb(0, 230, 118)') || input.style.border.includes('#00e676'))) {
+            input.style.border = '';
+            input.style.boxShadow = '';
+        }
+    });
+    
+    // Remove inline highlight styles from buttons
+    document.querySelectorAll('button').forEach(btn => {
+        if (btn.style.border && (
+            btn.style.border.includes('rgb(0, 230, 118)') || 
+            btn.style.border.includes('#00e676') ||
+            btn.style.border.includes('rgb(233, 30, 99)') ||
+            btn.style.border.includes('#e91e63')
+        )) {
+            btn.style.border = '';
+            btn.style.boxShadow = '';
+            btn.style.transform = '';
+        }
+    });
+    
+    console.log('[Auto] All highlights cleared');
+}
+
+// Auto-highlight function to visually mark team buttons
+function autoHighlightTeams(data) {
+    // Skip if highlighting is disabled
+    if (!highlightEnabled) return;
+    
+    if (!data || !data.odds || data.odds.length < 2) return;
+    
+    // Remove old highlights
+    document.querySelectorAll('[data-arb-highlight]').forEach(el => {
+        el.removeAttribute('data-arb-highlight');
+    });
+    
+    if (data.type === 'stack') {
+        const stackItems = document.querySelectorAll('.outcome-content');
+        stackItems.forEach((item, index) => {
+            const container = item.closest('button');
+            if (container) {
+                container.setAttribute('data-arb-highlight', index === 0 ? 'team1' : 'team2');
+            }
+        });
+    } else if (data.type === 'polymarket') {
+        const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+        polyButtons.forEach((btn, index) => {
+            btn.setAttribute('data-arb-highlight', index === 0 ? 'team1' : 'team2');
+        });
+    }
 }
 
 // --- Live Monitoring (Ultra Low Latency with Smart Change Detection) ---
@@ -540,22 +466,54 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         } else {
             removeConversions();
             stopObserver();
+            // Clear all highlights including inline styles
+            clearAllHighlights();
         }
     }
     if (request.action === "toggleLive") {
         if (request.enabled) startLiveMonitoring();
         else stopLiveMonitoring();
     }
+    
+    // Toggle Highlight on/off
+    if (request.action === "toggleHighlight") {
+        highlightEnabled = request.enabled;
+        if (!highlightEnabled) {
+            clearAllHighlights();
+        }
+        sendResponse({ success: true });
+    }
+    
+    // Clear all highlights on request
+    if (request.action === "clear_highlights") {
+        clearAllHighlights();
+        sendResponse({ success: true });
+    }
+    
     // ... highlight handler below ...
     if (request.action === "highlight_odds") {
-        const targets = request.targets || []; // Array of { team, type } 
+        // Skip if highlighting is disabled
+        if (!highlightEnabled) {
+            sendResponse({ success: false, reason: 'highlighting disabled' });
+            return;
+        }
+        
+        const targets = request.targets || []; // Array of { team, type, teamIndex, isArb } 
         // type: 'polymarket' or 'stack'
+        // teamIndex: 0 = Team 1 (Pink), 1 = Team 2 (Orange)
+        // isArb: if true, use green glow animation
 
-        // Remove old highlights
-        document.querySelectorAll('.arb-highlight-box').forEach(el => el.classList.remove('arb-highlight-box'));
+        // Remove old highlights first
+        document.querySelectorAll('[data-arb-highlight]').forEach(el => {
+            el.removeAttribute('data-arb-highlight');
+        });
 
-        // Highlight new targets
+        // Highlight new targets using CSS classes
         targets.forEach(tgt => {
+            const highlightClass = tgt.isArb 
+                ? (tgt.teamIndex === 0 ? 'arb1' : 'arb2')  // Arb with green glow
+                : (tgt.teamIndex === 0 ? 'team1' : 'team2'); // Regular team colors
+            
             // Logic to find and highlight in DOM
             if (tgt.type === 'stack') {
                 const stackItems = document.querySelectorAll('.outcome-content');
@@ -565,10 +523,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         const teamName = nameEl.textContent.trim().toUpperCase();
                         // Simple includes match
                         if (teamName.includes(tgt.team) || tgt.team.includes(teamName)) {
-                            // Found it! Apply style to the BUTTON container group
                             const container = item.closest('button');
                             if (container) {
-                                container.setAttribute('style', 'background-color: #ffe0b2 !important; border: 2px solid #e65100 !important;');
+                                container.setAttribute('data-arb-highlight', highlightClass);
                             }
                         }
                     }
@@ -578,11 +535,52 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 polyButtons.forEach(btn => {
                     const txt = btn.textContent.trim().toUpperCase();
                     if (txt.includes(tgt.team)) {
-                        btn.setAttribute('style', 'background-color: #ffe0b2 !important; border: 2px solid #e65100 !important;');
+                        btn.setAttribute('data-arb-highlight', highlightClass);
                     }
                 });
             }
         });
+    }
+    
+    // Auto-highlight teams when arb data is received (for live updates)
+    if (request.action === "highlight_arb_teams") {
+        // Skip if highlighting is disabled
+        if (!highlightEnabled) return;
+        
+        const arbData = request.arbData; // { team1, team2, isArb }
+        if (!arbData) return;
+        
+        // Remove old highlights
+        document.querySelectorAll('[data-arb-highlight]').forEach(el => {
+            el.removeAttribute('data-arb-highlight');
+        });
+        
+        // Detect page type and highlight using CSS classes
+        const isStake = document.querySelector('.outcome-content');
+        const isPoly = document.querySelector('button.trading-button, button[class*="trading-button"]');
+        
+        if (isStake) {
+            const stackItems = document.querySelectorAll('.outcome-content');
+            stackItems.forEach((item, index) => {
+                const container = item.closest('button');
+                if (container) {
+                    const highlightClass = arbData.isArb 
+                        ? (index === 0 ? 'arb1' : 'arb2') 
+                        : (index === 0 ? 'team1' : 'team2');
+                    container.setAttribute('data-arb-highlight', highlightClass);
+                }
+            });
+        }
+        
+        if (isPoly) {
+            const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+            polyButtons.forEach((btn, index) => {
+                const highlightClass = arbData.isArb 
+                    ? (index === 0 ? 'arb1' : 'arb2') 
+                    : (index === 0 ? 'team1' : 'team2');
+                btn.setAttribute('data-arb-highlight', highlightClass);
+            });
+        }
     }
 
     if (request.action === "click_bet_button") {
@@ -591,75 +589,184 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const targetTeam = request.team ? request.team.toUpperCase() : null;
         const targetId = request.id;
         const expectedOdds = parseFloat(request.expectedOdds); // The decimal odds we want
-        const retryLimit = request.retryLimit || 1; // Default from request or 1
-        const tolerance = 0.05; // increased tolerance slightly for small drifts
+        const retryLimit = request.retryLimit || 10; // More retries for slower pages
+        const tolerance = 0.15; // Slightly larger tolerance for odds drift
 
-        console.log(`[Auto] Target: ${targetTeam}, ID: ${targetId}, Expect: ${expectedOdds}, Amt: ${request.amount}`);
+        console.log(`[Auto] ========== CLICK BET BUTTON ==========`);
+        console.log(`[Auto] Target Team: ${targetTeam}`);
+        console.log(`[Auto] Target ID: ${targetId}`);
+        console.log(`[Auto] Expected Odds: ${expectedOdds}`);
+        console.log(`[Auto] Amount: ${request.amount}`);
+
+        // Fuzzy team name matching helper
+        const fuzzyMatch = (searchTerm, buttonText) => {
+            if (!searchTerm || !buttonText) return false;
+            const s = searchTerm.toUpperCase().trim();
+            const b = buttonText.toUpperCase().trim();
+            
+            // Exact match
+            if (b === s) return true;
+            
+            // Button text contains search term
+            if (b.includes(s)) return true;
+            
+            // Search term contains button text (for short names like "CLE")
+            if (s.includes(b.split(' ')[0]) && b.split(' ')[0].length >= 2) return true;
+            
+            // First 3 chars match (team abbreviations)
+            if (s.length >= 3 && b.substring(0, 3) === s.substring(0, 3)) return true;
+            
+            // Extract first word from button text and compare
+            const firstWord = b.split(/[\s\d¢]+/)[0];
+            if (firstWord && firstWord.length >= 2 && (s.includes(firstWord) || firstWord.includes(s))) return true;
+            
+            // NBA team abbrev matching (e.g., "CLEV" matches "CLE", "NYK" matches "NEW YORK")
+            const nbaAbbrevs = {
+                'CLE': ['CLEV', 'CLEVELAND', 'CAVALIERS', 'CAVS'],
+                'NYK': ['NEW YORK', 'KNICKS', 'NY'],
+                'LAL': ['LOS ANGELES', 'LAKERS', 'LA LAKERS'],
+                'GSW': ['GOLDEN STATE', 'WARRIORS', 'GS'],
+                'BOS': ['BOSTON', 'CELTICS'],
+                'MIA': ['MIAMI', 'HEAT'],
+                'CHI': ['CHICAGO', 'BULLS'],
+                'PHX': ['PHOENIX', 'SUNS'],
+                'DEN': ['DENVER', 'NUGGETS'],
+                'MIL': ['MILWAUKEE', 'BUCKS'],
+                'PHI': ['PHILADELPHIA', 'SIXERS', '76ERS'],
+                'DAL': ['DALLAS', 'MAVERICKS', 'MAVS'],
+                'SAS': ['SAN ANTONIO', 'SPURS'],
+                'OKC': ['OKLAHOMA', 'THUNDER'],
+                'MEM': ['MEMPHIS', 'GRIZZLIES'],
+                'NOP': ['NEW ORLEANS', 'PELICANS'],
+                'MIN': ['MINNESOTA', 'TIMBERWOLVES', 'WOLVES'],
+                'SAC': ['SACRAMENTO', 'KINGS'],
+                'POR': ['PORTLAND', 'BLAZERS', 'TRAIL BLAZERS'],
+                'IND': ['INDIANA', 'PACERS'],
+                'ATL': ['ATLANTA', 'HAWKS'],
+                'TOR': ['TORONTO', 'RAPTORS'],
+                'BKN': ['BROOKLYN', 'NETS'],
+                'CHA': ['CHARLOTTE', 'HORNETS'],
+                'DET': ['DETROIT', 'PISTONS'],
+                'ORL': ['ORLANDO', 'MAGIC'],
+                'WAS': ['WASHINGTON', 'WIZARDS'],
+                'UTA': ['UTAH', 'JAZZ'],
+                'LAC': ['LA CLIPPERS', 'CLIPPERS'],
+                'HOU': ['HOUSTON', 'ROCKETS']
+            };
+            
+            // Check if search term or button text is a known abbreviation
+            for (const [abbrev, aliases] of Object.entries(nbaAbbrevs)) {
+                if (s === abbrev || s.includes(abbrev)) {
+                    for (const alias of aliases) {
+                        if (b.includes(alias)) return true;
+                    }
+                }
+                if (aliases.some(a => s.includes(a))) {
+                    if (b.includes(abbrev) || aliases.some(a => b.includes(a))) return true;
+                }
+            }
+            
+            return false;
+        };
 
         // Helper to extract numeric odds from text
         const parseOddsFromText = (text) => {
             // Polymarket: "59¢" -> 1.69
             const cents = text.match(/(\d+)\s*¢/);
-            if (cents) return (100 / parseInt(cents[1])).toFixed(2);
-            // Stake: "1.85"
+            if (cents) return parseFloat((100 / parseInt(cents[1])).toFixed(2));
+            // Decimal odds: "2.86" or "CLE 2.86"
             const dec = text.match(/(\d+\.\d+)/);
             if (dec) return parseFloat(dec[1]);
             return null;
         };
 
         const checkAndClick = (attempts = 0) => {
-            // Use retryLimit from user settings (e.g. 5 retries)
-            // If retryLimit is small (e.g. 1), we don't want to loop forever.
-            // But we also have a max timeout safety.
-
-            // Logic: 
-            // If we match odds -> good.
-            // If we find button but odds mismatch -> consume 1 retry attempt.
-            // If we don't find button -> consume 1 retry attempt (maybe loading).
-
             if (attempts >= retryLimit) {
                 console.warn(`[Auto] Max retries (${retryLimit}) reached.`);
-                // Send notification to TG instead of alert
                 chrome.runtime.sendMessage({ 
                     action: "bet_error", 
-                    error: "Max retries reached",
-                    details: `Odds mismatch or Element not found after ${retryLimit} retries`,
-                    team: targetTeam
+                    error: `Element not found or odds mismatch after ${retryLimit} retries`,
+                    team: targetTeam 
                 });
                 return;
             }
 
             let found = false;
+            console.log(`[Auto] Attempt ${attempts + 1}/${retryLimit}`);
 
             // --- POLYMARKET CHECK ---
-            if (!found) {
-                const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
+            // Try multiple selector patterns
+            const polySelectors = [
+                'button.trading-button',
+                'button[class*="trading-button"]',
+                'button[data-color="custom"]',
+                'button[class*="c-"]' // Polymarket uses dynamic class names
+            ];
+            
+            let polyButtons = [];
+            for (const sel of polySelectors) {
+                const btns = document.querySelectorAll(sel);
+                if (btns.length > 0) {
+                    polyButtons = btns;
+                    console.log(`[Auto] Found ${btns.length} buttons with selector: ${sel}`);
+                    break;
+                }
+            }
+
+            // Also check for the specific buy panel buttons
+            const buyPanelButtons = document.querySelectorAll('button[class*="bg-"]');
+            console.log(`[Auto] Found ${buyPanelButtons.length} bg-* buttons`);
+            
+            // Log all potential buttons for debugging
+            const allButtons = document.querySelectorAll('button');
+            console.log(`[Auto] Total buttons on page: ${allButtons.length}`);
+
+            if (!found && polyButtons.length > 0) {
                 for (const btn of polyButtons) {
                     const txt = btn.textContent.trim().toUpperCase();
+                    console.log(`[Auto] Checking Poly button: "${txt}"`);
 
-                    // Match Team
+                    // Match Team using fuzzy matching
                     let isMatch = false;
-                    if (targetId && btn.id === targetId) isMatch = true;
-                    else if (targetTeam && (txt.includes(targetTeam) || targetTeam.includes(txt.split(' ')[0]))) isMatch = true;
+                    if (targetId && btn.id === targetId) {
+                        isMatch = true;
+                        console.log(`[Auto] Matched by ID: ${targetId}`);
+                    } else if (targetTeam && fuzzyMatch(targetTeam, txt)) {
+                        isMatch = true;
+                        console.log(`[Auto] Fuzzy matched: ${targetTeam} ~ ${txt}`);
+                    }
+                    
+                    // Also check the parent link element for team name
+                    if (!isMatch && targetTeam) {
+                        const linkEl = btn.closest('a');
+                        if (linkEl) {
+                            const linkText = linkEl.textContent.trim().toUpperCase();
+                            if (fuzzyMatch(targetTeam, linkText)) {
+                                isMatch = true;
+                                console.log(`[Auto] Fuzzy matched via parent link: ${targetTeam} ~ ${linkText}`);
+                            }
+                        }
+                    }
 
                     if (isMatch) {
+                        console.log(`[Auto] MATCH found for ${targetTeam} in button: "${txt}"`);
+                        
                         // Match Odds
-                        const btnText = btn.innerText; // innerText often contains the 59¢ part
-                        const currentOdds = parseOddsFromText(btnText);
+                        const currentOdds = parseOddsFromText(txt);
+                        console.log(`[Auto] Parsed odds from button: ${currentOdds}`);
 
-                        // Poly uses inverse price, so strict decimal check might be tricky due to rounding.
-                        // Let's trust if we found the button and odds are "close enough" or if expected is null
-                        if (currentOdds) {
+                        if (currentOdds && expectedOdds) {
                             const diff = Math.abs(currentOdds - expectedOdds);
-                            if (diff > tolerance && expectedOdds) {
+                            console.log(`[Auto] Odds diff: ${diff} (tolerance: ${tolerance})`);
+                            if (diff > tolerance) {
                                 console.log(`[Auto] Poly Odds mismatch. Saw ${currentOdds}, Want ${expectedOdds}. Retrying...`);
                                 setTimeout(() => checkAndClick(attempts + 1), 500);
-                                return; // Retry loop
+                                return;
                             }
                         }
 
                         // Found & Valid!
-                        console.log("[Auto] Poly Match Found. Clicking...");
+                        console.log("[Auto] ✓ Poly Match Found. Clicking...");
                         robustClick(btn);
                         fillPolySlip(request.amount);
                         found = true;
@@ -671,31 +778,39 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             // --- STAKE CHECK ---
             if (!found) {
                 const stackItems = document.querySelectorAll('.outcome-content');
+                console.log(`[Auto] Found ${stackItems.length} Stake outcome items`);
+                
                 for (const item of stackItems) {
                     const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
                     if (nameEl) {
                         const team = nameEl.textContent.trim().toUpperCase();
-                        if (team === targetTeam || (targetTeam && team.includes(targetTeam))) {
-                            // Check Odds
-                            // User says: <span ... data-ds-text="true">1.85</span>
-                            // Often inside [data-testid="fixture-odds"]
+                        console.log(`[Auto] Checking Stake team: "${team}"`);
+                        
+                        // Use fuzzy matching for Stake as well
+                        if (fuzzyMatch(targetTeam, team)) {
+                            console.log(`[Auto] Fuzzy matched Stake: ${targetTeam} ~ ${team}`);
                             const oddsContainer = item.querySelector('[data-testid="fixture-odds"]');
                             let currentOdds = null;
                             if (oddsContainer) currentOdds = parseOddsFromText(oddsContainer.textContent);
 
-                            if (currentOdds) {
-                                if (Math.abs(currentOdds - expectedOdds) > tolerance && expectedOdds) {
+                            if (currentOdds && expectedOdds) {
+                                if (Math.abs(currentOdds - expectedOdds) > tolerance) {
                                     console.log(`[Auto] Stake Odds mismatch. Saw ${currentOdds}, Want ${expectedOdds}. Retrying...`);
                                     setTimeout(() => checkAndClick(attempts + 1), 500);
                                     return;
                                 }
                             }
 
-                            // Found & Valid!
-                            console.log("[Auto] Stake Match Found. Clicking...");
+                            console.log("[Auto] ✓ Stake Match Found. Clicking...");
                             const btn = item.closest('button');
-                            btn.scrollIntoView({ block: 'center' });
-                            btn.click();
+                            if (btn) {
+                                btn.scrollIntoView({ block: 'center' });
+                                robustClick(btn);
+                            } else {
+                                // Fallback: click the item itself
+                                item.scrollIntoView({ block: 'center' });
+                                robustClick(item);
+                            }
                             fillStakeSlip(request.amount);
                             found = true;
                             break;
@@ -705,282 +820,791 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
 
             if (!found) {
-                // If strictly looking for ID/Text and didn't find button at all -> retry (maybe loading)
-                setTimeout(() => checkAndClick(attempts + 1), 100);
+                // Not found yet - retry with delay
+                console.log(`[Auto] Not found yet, retrying in 500ms...`);
+                setTimeout(() => checkAndClick(attempts + 1), 500);
             }
         };
 
         const robustClick = (el) => {
+            console.log(`[Auto] robustClick called on:`, el);
+            console.log(`[Auto] Element text: "${el.textContent.trim().substring(0, 50)}"`);
+            
+            // Ensure element is visible
             el.scrollIntoView({ behavior: 'auto', block: 'center' });
-            el.click();
+            
+            // Get element position
+            const rect = el.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            
+            console.log(`[Auto] Element position: (${centerX}, ${centerY})`);
+            
+            // Visual feedback
             el.style.border = "4px solid #00e676";
+            el.style.boxShadow = "0 0 20px rgba(0, 230, 118, 0.8)";
+            
+            // Helper function to perform all click methods
+            const performClick = () => {
+                // Focus first
+                if (el.focus) el.focus();
+                
+                // Direct click
+                el.click();
+                
+                // Pointer events
+                el.dispatchEvent(new PointerEvent('pointerdown', { 
+                    bubbles: true, cancelable: true, view: window,
+                    clientX: centerX, clientY: centerY, pointerId: 1,
+                    pointerType: 'mouse', isPrimary: true
+                }));
+                el.dispatchEvent(new PointerEvent('pointerup', { 
+                    bubbles: true, cancelable: true, view: window,
+                    clientX: centerX, clientY: centerY, pointerId: 1,
+                    pointerType: 'mouse', isPrimary: true
+                }));
+                
+                // Mouse events
+                el.dispatchEvent(new MouseEvent('mousedown', {
+                    bubbles: true, cancelable: true, view: window,
+                    clientX: centerX, clientY: centerY, button: 0
+                }));
+                el.dispatchEvent(new MouseEvent('mouseup', {
+                    bubbles: true, cancelable: true, view: window,
+                    clientX: centerX, clientY: centerY, button: 0
+                }));
+                el.dispatchEvent(new MouseEvent('click', {
+                    bubbles: true, cancelable: true, view: window,
+                    clientX: centerX, clientY: centerY, button: 0
+                }));
+            };
+            
+            // Click 1: Immediate
+            console.log(`[Auto] Click attempt 1`);
+            performClick();
+            
+            // Click 2: After 100ms
+            setTimeout(() => {
+                console.log(`[Auto] Click attempt 2`);
+                performClick();
+                
+                // Also try clicking the parent span wrapper (Polymarket wraps buttons in spans)
+                const parentSpan = el.closest('span[style*="display: flex"]');
+                if (parentSpan && parentSpan !== el) {
+                    console.log(`[Auto] Also clicking parent span`);
+                    parentSpan.click();
+                }
+            }, 100);
+            
+            // Click 3: After 200ms - click inner span
+            setTimeout(() => {
+                console.log(`[Auto] Click attempt 3 - inner elements`);
+                const innerSpan = el.querySelector('span.trading-button-text');
+                if (innerSpan) {
+                    innerSpan.click();
+                }
+                // Also try the p element with team name
+                const pEl = el.querySelector('p');
+                if (pEl) {
+                    pEl.click();
+                }
+            }, 200);
+            
+            // Click 4: After 300ms - final attempt with different event
+            setTimeout(() => {
+                console.log(`[Auto] Click attempt 4 - final`);
+                // Try triggering the button's native onclick
+                if (el.onclick) {
+                    el.onclick(new MouseEvent('click'));
+                }
+                // Dispatch on document at element coordinates
+                document.elementFromPoint(centerX, centerY)?.click();
+            }, 300);
+            
+            console.log(`[Auto] robustClick initiated - 4 attempts scheduled`);
         };
 
         const fillPolySlip = (amount) => {
+            console.log(`[Auto] fillPolySlip called with amount: ${amount}, team: ${targetTeam}`);
+            
             const attempt = (n) => {
-                if (n > 20) return;
-                const input = document.querySelector('input[placeholder="$0"]');
-                const actionBtn = document.querySelector('button[data-color="blue"]');
-                if (input && actionBtn) {
+                if (n > 40) {
+                    console.log(`[Auto] fillPolySlip max attempts reached`);
+                    return;
+                }
+                
+                console.log(`[Auto] fillPolySlip attempt ${n}`);
+                
+                // Step 1: Look for the bet panel (div with width: 340px)
+                const betPanel = document.querySelector('div[style*="width: 340px"]');
+                
+                if (!betPanel) {
+                    console.log(`[Auto] Bet panel not found yet, retrying...`);
+                    setTimeout(() => attempt(n + 1), 200);
+                    return;
+                }
+                
+                console.log(`[Auto] Bet panel found`);
+                
+                // Step 2: Find and click the correct outcome button
+                // These are inside #outcome-buttons with role="radio"
+                const outcomeButtons = document.querySelectorAll('#outcome-buttons button[role="radio"]');
+                console.log(`[Auto] Found ${outcomeButtons.length} outcome buttons`);
+                
+                let targetOutcomeBtn = null;
+                let isAlreadySelected = false;
+                
+                for (const btn of outcomeButtons) {
+                    const btnText = btn.textContent.trim().toUpperCase();
+                    console.log(`[Auto] Checking outcome: "${btnText}"`);
+                    
+                    if (fuzzyMatch(targetTeam, btnText)) {
+                        targetOutcomeBtn = btn;
+                        isAlreadySelected = btn.getAttribute('aria-checked') === 'true';
+                        console.log(`[Auto] Found target outcome: "${btnText}", selected: ${isAlreadySelected}`);
+                        break;
+                    }
+                }
+                
+                // If target team button found but not selected, click it with robust method
+                if (targetOutcomeBtn && !isAlreadySelected) {
+                    console.log(`[Auto] Clicking to select team: ${targetTeam}`);
+                    
+                    // Use multiple click methods for the outcome button
+                    const rect = targetOutcomeBtn.getBoundingClientRect();
+                    const centerX = rect.left + rect.width / 2;
+                    const centerY = rect.top + rect.height / 2;
+                    
+                    const clickOutcome = () => {
+                        targetOutcomeBtn.focus();
+                        targetOutcomeBtn.click();
+                        
+                        targetOutcomeBtn.dispatchEvent(new PointerEvent('pointerdown', { 
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, pointerId: 1,
+                            pointerType: 'mouse', isPrimary: true
+                        }));
+                        targetOutcomeBtn.dispatchEvent(new PointerEvent('pointerup', { 
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, pointerId: 1,
+                            pointerType: 'mouse', isPrimary: true
+                        }));
+                        targetOutcomeBtn.dispatchEvent(new MouseEvent('mousedown', {
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, button: 0
+                        }));
+                        targetOutcomeBtn.dispatchEvent(new MouseEvent('mouseup', {
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, button: 0
+                        }));
+                        targetOutcomeBtn.dispatchEvent(new MouseEvent('click', {
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, button: 0
+                        }));
+                    };
+                    
+                    // Click multiple times
+                    clickOutcome();
+                    setTimeout(clickOutcome, 100);
+                    setTimeout(clickOutcome, 200);
+                    
+                    // Wait for UI to update after selection
+                    setTimeout(() => attempt(n + 1), 400);
+                    return;
+                }
+                
+                // If we couldn't find matching outcome button, the wrong panel might be open
+                if (!targetOutcomeBtn && outcomeButtons.length > 0) {
+                    console.log(`[Auto] Target team ${targetTeam} not found in panel outcomes. Panel might be for wrong game.`);
+                    // Log what teams are available
+                    for (const btn of outcomeButtons) {
+                        console.log(`[Auto] Available: "${btn.textContent.trim()}"`);
+                    }
+                    // Still retry in case panel updates
+                    setTimeout(() => attempt(n + 1), 300);
+                    return;
+                }
+                
+                // Step 3: Find the amount input
+                const input = document.querySelector('#market-order-amount-input');
+                
+                if (!input) {
+                    console.log(`[Auto] Input not found, retrying...`);
+                    setTimeout(() => attempt(n + 1), 200);
+                    return;
+                }
+                
+                console.log(`[Auto] Input found, current value: "${input.value}"`);
+                
+                // Extract odds from the selected outcome button
+                let extractedOdds = null;
+                const selectedOutcome = document.querySelector('#outcome-buttons button[aria-checked="true"]');
+                if (selectedOutcome) {
+                    const btnText = selectedOutcome.textContent;
+                    const oddsMatch = btnText.match(/(\d+\.\d+)/);
+                    if (oddsMatch) {
+                        extractedOdds = parseFloat(oddsMatch[1]);
+                        console.log(`[Auto] Extracted odds: ${extractedOdds}`);
+                    }
+                }
+                
+                // Also try avg price tag
+                if (!extractedOdds) {
+                    const avgPriceEl = document.querySelector('.odds-converted-tag');
+                    if (avgPriceEl) {
+                        extractedOdds = parseFloat(avgPriceEl.textContent.trim());
+                        console.log(`[Auto] Extracted odds from avg price: ${extractedOdds}`);
+                    }
+                }
+                
+                const finalOdds = extractedOdds || expectedOdds;
+                console.log(`[Auto] Final odds: ${finalOdds}`);
+                
+                // Set input value using React's native value setter
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                nativeInputValueSetter.call(input, '1');
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                
+                console.log(`[Auto] Input value set to: "${input.value}"`);
+                
+                // Wait for panel to expand (shows "To win" section)
+                setTimeout(() => {
+                    console.log(`[Auto] Looking for Buy button...`);
+                    
+                    // Step 4: Find the Buy button
+                    // It's a trading-button with tabindex="0" (not "-1" like outcome buttons)
+                    // And NOT inside #outcome-buttons
+                    let buyBtn = null;
+                    const allBtns = document.querySelectorAll('button.trading-button');
+                    
+                    for (const btn of allBtns) {
+                        // Skip if inside outcome-buttons
+                        if (btn.closest('#outcome-buttons')) continue;
+                        
+                        // Skip if it's a radio button
+                        if (btn.getAttribute('role') === 'radio') continue;
+                        
+                        const txt = btn.textContent.toLowerCase().replace(/\s+/g, ' ').trim();
+                        console.log(`[Auto] Checking button: "${txt}"`);
+                        
+                        if (txt.startsWith('buy ')) {
+                            buyBtn = btn;
+                            console.log(`[Auto] Found Buy button: "${txt}"`);
+                            break;
+                        }
+                    }
+                    
+                    if (!buyBtn) {
+                        console.log(`[Auto] Buy button not found, retrying...`);
+                        setTimeout(() => attempt(n + 1), 300);
+                        return;
+                    }
+                    
+                    // Click the Buy button multiple times
+                    console.log(`[Auto] Clicking Buy button...`);
+                    
+                    const rect = buyBtn.getBoundingClientRect();
+                    const centerX = rect.left + rect.width / 2;
+                    const centerY = rect.top + rect.height / 2;
+                    
+                    const clickBuy = () => {
+                        buyBtn.focus();
+                        buyBtn.click();
+                        
+                        // Pointer events
+                        buyBtn.dispatchEvent(new PointerEvent('pointerdown', { 
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, pointerId: 1,
+                            pointerType: 'mouse', isPrimary: true
+                        }));
+                        buyBtn.dispatchEvent(new PointerEvent('pointerup', { 
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, pointerId: 1,
+                            pointerType: 'mouse', isPrimary: true
+                        }));
+                        
+                        // Mouse events
+                        buyBtn.dispatchEvent(new MouseEvent('mousedown', {
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, button: 0
+                        }));
+                        buyBtn.dispatchEvent(new MouseEvent('mouseup', {
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, button: 0
+                        }));
+                        buyBtn.dispatchEvent(new MouseEvent('click', {
+                            bubbles: true, cancelable: true, view: window,
+                            clientX: centerX, clientY: centerY, button: 0
+                        }));
+                    };
+                    
+                    // Click 1
+                    clickBuy();
+                    
+                    // Click 2 after 100ms
+                    setTimeout(() => {
+                        console.log(`[Auto] Buy button click 2`);
+                        clickBuy();
+                    }, 100);
+                    
+                    // Click 3 after 200ms
+                    setTimeout(() => {
+                        console.log(`[Auto] Buy button click 3`);
+                        clickBuy();
+                        // Also try clicking inner span
+                        const innerSpan = buyBtn.querySelector('span');
+                        if (innerSpan) innerSpan.click();
+                    }, 200);
+                    
+                    console.log(`[Auto] Buy button click sequence initiated`);
+                    
+                    // Save bet info
+                    const betInfo = {
+                        platform: 'polymarket',
+                        team: targetTeam,
+                        amount: 1,
+                        odds: finalOdds,
+                        timestamp: Date.now(),
+                        status: 'placed'
+                    };
+                    
+                    chrome.storage.local.get(['activeBets', 'totalBets'], (res) => {
+                        const activeBets = res.activeBets || [];
+                        const totalBets = res.totalBets || 0;
+                        activeBets.push(betInfo);
+                        chrome.storage.local.set({ 
+                            activeBets: activeBets,
+                            totalBets: totalBets + 1
+                        });
+                        console.log(`[Auto] Bet saved:`, betInfo);
+                    });
+                    
+                    chrome.runtime.sendMessage({ 
+                        action: "bet_placed_success", 
+                        team: targetTeam, 
+                        amount: 1,
+                        odds: finalOdds,
+                        platform: 'polymarket'
+                    });
+                    
+                }, 800); // Wait for panel to expand after entering amount
+            };
+            
+            // Start with a small delay to let the panel render
+            setTimeout(() => attempt(0), 300);
+        };
+
+        const fillStakeSlip = (amount) => {
+            console.log(`[Auto] fillStakeSlip called with amount: ${amount}`);
+            
+            const attempt = (n) => {
+                if (n > 30) {
+                    console.log(`[Auto] fillStakeSlip max attempts reached`);
+                    return;
+                }
+                
+                console.log(`[Auto] fillStakeSlip attempt ${n}`);
+                
+                // Try multiple selectors for Stake
+                const inputSelectors = [
+                    'input[data-testid="input-bet-amount"]',
+                    'input[name="stake"]',
+                    'input[placeholder*="0.00"]',
+                    '.bet-slip input[type="text"]',
+                    '.betslip input'
+                ];
+                
+                let input = null;
+                for (const sel of inputSelectors) {
+                    input = document.querySelector(sel);
+                    if (input) {
+                        console.log(`[Auto] Found Stake input with selector: ${sel}`);
+                        break;
+                    }
+                }
+                
+                const placeBtnSelectors = [
+                    'button[data-testid="betSlip-place-bets-button"]',
+                    'button[data-testid="place-bet-button"]',
+                    'button.place-bet',
+                    'button[class*="place"]'
+                ];
+                
+                let placeBtn = null;
+                for (const sel of placeBtnSelectors) {
+                    placeBtn = document.querySelector(sel);
+                    if (placeBtn) {
+                        console.log(`[Auto] Found place bet button with selector: ${sel}`);
+                        break;
+                    }
+                }
+                
+                // Also look for button by text
+                if (!placeBtn) {
+                    const allBtns = document.querySelectorAll('button');
+                    for (const btn of allBtns) {
+                        const txt = btn.textContent.toLowerCase();
+                        if (txt.includes('place bet') || txt.includes('place bets')) {
+                            placeBtn = btn;
+                            console.log(`[Auto] Found place bet button by text: "${btn.textContent}"`);
+                            break;
+                        }
+                    }
+                }
+                
+                if (input && placeBtn) {
+                    console.log(`[Auto] Stake input and Place Bet button found!`);
+                    const valueToSet = amount || "0.01";
+                    
+                    input.focus();
+                    input.click();
+                    
+                    // Multiple methods to set value
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                    nativeSetter.call(input, valueToSet);
+                    input.value = valueToSet;
+                    
+                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                    input.dispatchEvent(new InputEvent('input', { 
+                        bubbles: true, 
+                        inputType: 'insertText',
+                        data: valueToSet
+                    }));
+                    
+                    // Try execCommand
+                    input.select();
+                    document.execCommand('insertText', false, valueToSet);
+                    
+                    console.log(`[Auto] Stake input value set to: ${input.value}`);
+                    input.style.border = "3px solid #00e676";
+
+                    setTimeout(() => {
+                        console.log(`[Auto] Final Stake input value: ${input.value}`);
+                        
+                        // Highlight and click Place Bet button
+                        placeBtn.style.border = "4px solid #e91e63";
+                        placeBtn.style.boxShadow = "0 0 15px rgba(233, 30, 99, 0.8)";
+                        
+                        console.log(`[Auto] 🚀 Clicking Place Bet button...`);
+                        robustClick(placeBtn);
+                        
+                        // Store the bet info
+                        const betInfo = {
+                            platform: 'stake',
+                            team: targetTeam,
+                            amount: parseFloat(amount) || 0.01,
+                            odds: expectedOdds,
+                            timestamp: Date.now(),
+                            status: 'pending'
+                        };
+                        
+                        chrome.storage.local.get(['activeBets', 'totalBets'], (res) => {
+                            const activeBets = res.activeBets || [];
+                            const totalBets = res.totalBets || 0;
+                            activeBets.push(betInfo);
+                            chrome.storage.local.set({ 
+                                activeBets: activeBets,
+                                totalBets: totalBets + 1
+                            });
+                            console.log(`[Auto] ✅ Stake bet recorded:`, betInfo);
+                        });
+                        
+                        chrome.runtime.sendMessage({ 
+                            action: "bet_placed_success", 
+                            team: targetTeam, 
+                            amount: amount, 
+                            odds: expectedOdds,
+                            platform: 'stake'
+                        });
+                        
+                        // Monitor for result
+                        monitorStakeResult(targetTeam, parseFloat(amount) || 0.01, expectedOdds);
+                        
+                    }, 500);
+                } else if (input && !placeBtn) {
+                    // Input found but no Place Bet button - still fill the input
+                    console.log(`[Auto] Found Stake input but no Place Bet button, filling anyway...`);
                     input.focus();
                     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                     nativeSetter.call(input, amount || "0.01");
                     input.dispatchEvent(new Event('input', { bubbles: true }));
-
-                    setTimeout(() => {
-                        // Don't auto-click confirm yet? User asked to "click booked profit".
-                        // Usually we just highlight the button
-                        actionBtn.style.border = "4px solid #e91e63";
-                        // Send success message
-                        chrome.runtime.sendMessage({ action: "bet_placed_success", team: targetTeam, amount: amount, odds: expectedOdds });
-                    }, 500);
-                } else setTimeout(() => attempt(n + 1), 250);
+                    setTimeout(() => attempt(n + 1), 250);
+                } else {
+                    console.log(`[Auto] Stake Input: ${!!input}, PlaceBtn: ${!!placeBtn} - retrying...`);
+                    setTimeout(() => attempt(n + 1), 250);
+                }
             };
             attempt(0);
         };
 
-        const fillStakeSlip = (amount) => {
-            const startTime = Date.now(); // Track execution time
+        // Monitor Polymarket result for win/loss
+        const monitorPolymarketResult = (team, amount, odds) => {
+            console.log(`[Auto] 📊 Monitoring Polymarket result for ${team}...`);
             
-            const attempt = (n) => {
-                if (n > 20) return;
-                // Try multiple selectors for stake input - site may change format
-                const input = document.querySelector('input[data-testid="input-bet-amount"]') ||
-                              document.querySelector('input[placeholder="Enter Stake"]') ||
-                              document.querySelector('input[data-numpad-trigger="true"]');
-                // Try multiple selectors for Place Bet button
-                const placeBtn = document.querySelector('button[data-testid="betSlip-place-bets-button"]') ||
-                                 document.querySelector('button span[data-ds-text="true"]')?.closest('button') ||
-                                 Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Place Bet'));
+            let checkCount = 0;
+            const maxChecks = 60; // Check for 30 seconds
+            
+            const checkResult = () => {
+                checkCount++;
+                if (checkCount > maxChecks) {
+                    console.log(`[Auto] ⏰ Monitoring timeout for ${team}`);
+                    return;
+                }
                 
-                if (input && placeBtn) {
-                    // Ensure amount is valid - convert to number and check
-                    let betAmount = parseFloat(amount);
-                    if (isNaN(betAmount) || betAmount <= 0) {
-                        betAmount = 0.1; // Default to 0.1 if invalid
-                    }
-                    const amountStr = betAmount.toString();
+                // Look for success/error messages on the page
+                const successIndicators = [
+                    '.toast-success',
+                    '[class*="success"]',
+                    '[class*="confirmed"]',
+                    'div:contains("Order placed")',
+                    'div:contains("Success")'
+                ];
+                
+                const errorIndicators = [
+                    '.toast-error',
+                    '[class*="error"]',
+                    '[class*="failed"]',
+                    'div:contains("Failed")',
+                    'div:contains("Error")'
+                ];
+                
+                let isSuccess = false;
+                let isError = false;
+                
+                // Check for success
+                for (const sel of successIndicators) {
+                    try {
+                        const el = document.querySelector(sel);
+                        if (el && el.offsetParent !== null) {
+                            isSuccess = true;
+                            break;
+                        }
+                    } catch (e) {}
+                }
+                
+                // Check for error
+                for (const sel of errorIndicators) {
+                    try {
+                        const el = document.querySelector(sel);
+                        if (el && el.offsetParent !== null) {
+                            isError = true;
+                            break;
+                        }
+                    } catch (e) {}
+                }
+                
+                if (isSuccess) {
+                    const profit = (amount * odds) - amount;
+                    console.log(`[Auto] ✅ WIN on Polymarket! Team: ${team}, Profit: $${profit.toFixed(4)}`);
                     
-                    // Clear and focus input
-                    input.focus();
-                    input.select();
-                    
-                    // Use native setter for React/Svelte compatibility
-                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-                    nativeSetter.call(input, amountStr);
-                    
-                    // Dispatch multiple events for React/Svelte compatibility
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
-                    input.dispatchEvent(new Event('change', { bubbles: true }));
-                    input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
-
-                    setTimeout(() => {
-                        // Highlight the stake input
-                        input.style.border = "3px solid #00e676";
-                        input.style.boxShadow = "0 0 10px #00e676";
+                    // Update storage with win
+                    chrome.storage.local.get(['totalProfit', 'wins', 'betHistory'], (res) => {
+                        const totalProfit = (res.totalProfit || 0) + profit;
+                        const wins = (res.wins || 0) + 1;
+                        const betHistory = res.betHistory || [];
                         
-                        // Click the Place Bet button
-                        console.log("[Auto] Clicking Place Bet button...");
-                        placeBtn.style.border = "4px solid #e91e63";
-                        placeBtn.click();
+                        betHistory.push({
+                            platform: 'polymarket',
+                            team: team,
+                            amount: amount,
+                            odds: odds,
+                            profit: profit,
+                            result: 'win',
+                            timestamp: Date.now()
+                        });
                         
-                        // Wait for confirmation dialog/button and click again if needed
-                        setTimeout(() => {
-                            // Look for confirmation button (might appear after first click)
-                            const confirmBtn = document.querySelector('button[data-testid="betSlip-place-bets-button"]') ||
-                                               Array.from(document.querySelectorAll('button')).find(b => 
-                                                   b.textContent.includes('Place Bet') || 
-                                                   b.textContent.includes('Confirm')
-                                               );
-                            if (confirmBtn && confirmBtn !== placeBtn) {
-                                console.log("[Auto] Clicking confirmation button...");
-                                confirmBtn.style.border = "4px solid #e91e63";
-                                confirmBtn.click();
-                            }
-                            
-                            // Check for any warnings/errors (insufficient balance, min bet, etc.)
-                            checkBetWarnings(targetTeam, amountStr, expectedOdds);
-                            
-                            // Send PENDING status first
-                            chrome.runtime.sendMessage({ 
-                                action: "bet_status_update", 
-                                team: targetTeam, 
-                                amount: amountStr, 
-                                odds: expectedOdds,
-                                status: "PENDING",
-                                timestamp: new Date().toISOString()
-                            });
-                            
-                            // Start checking for bet success
-                            verifyBetPlaced(targetTeam, amountStr, expectedOdds, startTime);
-                        }, 800);
-                    }, 500);
-                } else setTimeout(() => attempt(n + 1), 250);
+                        chrome.storage.local.set({ 
+                            totalProfit: totalProfit,
+                            wins: wins,
+                            betHistory: betHistory
+                        });
+                        
+                        console.log(`[Auto] 💰 Total Profit: $${totalProfit.toFixed(4)}, Wins: ${wins}`);
+                    });
+                    
+                    chrome.runtime.sendMessage({
+                        action: "bet_result",
+                        platform: 'polymarket',
+                        team: team,
+                        result: 'win',
+                        profit: profit
+                    });
+                    
+                } else if (isError) {
+                    console.log(`[Auto] ❌ LOSS/ERROR on Polymarket for ${team}`);
+                    
+                    chrome.storage.local.get(['totalProfit', 'losses', 'betHistory'], (res) => {
+                        const totalProfit = (res.totalProfit || 0) - amount;
+                        const losses = (res.losses || 0) + 1;
+                        const betHistory = res.betHistory || [];
+                        
+                        betHistory.push({
+                            platform: 'polymarket',
+                            team: team,
+                            amount: amount,
+                            odds: odds,
+                            profit: -amount,
+                            result: 'loss',
+                            timestamp: Date.now()
+                        });
+                        
+                        chrome.storage.local.set({ 
+                            totalProfit: totalProfit,
+                            losses: losses,
+                            betHistory: betHistory
+                        });
+                        
+                        console.log(`[Auto] 📉 Total Profit: $${totalProfit.toFixed(4)}, Losses: ${losses}`);
+                    });
+                    
+                    chrome.runtime.sendMessage({
+                        action: "bet_result",
+                        platform: 'polymarket',
+                        team: team,
+                        result: 'loss',
+                        profit: -amount
+                    });
+                    
+                } else {
+                    // Keep checking
+                    setTimeout(checkResult, 500);
+                }
             };
-            attempt(0);
+            
+            // Start checking after a delay
+            setTimeout(checkResult, 1000);
         };
         
-        // Function to verify bet was placed successfully by detecting GREEN CHECKMARK
-        // Wait up to 15 seconds (75 attempts × 200ms) for green checkmark to appear
-        // Network can be slow, so we keep polling until we see the SVG check icon
-        const verifyBetPlaced = (team, amount, odds, startTime, attempts = 0) => {
-            if (attempts > 75) {
-                // Max attempts reached (15 seconds) - bet might have failed
-                const endTime = Date.now();
-                const duration = endTime - startTime;
-                console.log(`[Auto] Bet verification timeout after ${duration}ms`);
-                chrome.runtime.sendMessage({ 
-                    action: "bet_placed_failed", 
-                    team: team, 
-                    amount: amount, 
-                    odds: odds,
-                    duration: duration,
-                    reason: "Verification timeout - no green checkmark detected"
-                });
-                return;
-            }
+        // Monitor Stake result for win/loss
+        const monitorStakeResult = (team, amount, odds) => {
+            console.log(`[Auto] 📊 Monitoring Stake result for ${team}...`);
             
-            // PRIMARY SUCCESS INDICATOR: Green checkmark SVG icon in betslip
-            // Look for <svg data-ds-icon="Check"> anywhere in the betslip area
-            const betSlip = document.querySelector('[data-testid="betslip-bet"]');
-            const betlistScroll = document.querySelector('.betlist-scroll');
+            let checkCount = 0;
+            const maxChecks = 60;
             
-            // Multiple ways to find the green check SVG
-            const greenCheckIcon = document.querySelector('[data-testid="betslip-bet"] svg[data-ds-icon="Check"]') ||
-                                   document.querySelector('.betlist-scroll svg[data-ds-icon="Check"]') ||
-                                   document.querySelector('svg[data-ds-icon="Check"]');
-            
-            // Secondary indicators - "Reuse Slip" and "Clear All" buttons appear after bet is placed
-            const reuseSlipBtn = Array.from(document.querySelectorAll('button span, span')).find(el => 
-                el.textContent.trim() === 'Reuse Slip'
-            );
-            const clearAllBtn = Array.from(document.querySelectorAll('button span, span')).find(el => 
-                el.textContent.trim() === 'Clear All'
-            );
-            
-            // Check if green checkmark SVG is visible (PRIMARY indicator of success)
-            const hasGreenCheck = greenCheckIcon !== null;
-            
-            // Check for bet outcome label (confirms bet details are showing)
-            const betOutcomeLabel = document.querySelector('[data-testid="bet-outcome-label"]');
-            const betOddsPayoutEl = document.querySelector('[data-testid="betslip-odds-payout"]');
-            
-            // Success: Green checkmark SVG present in betslip area
-            const isSuccess = hasGreenCheck && (betSlip || reuseSlipBtn || clearAllBtn || betlistScroll);
-            
-            if (isSuccess) {
-                const endTime = Date.now();
-                const duration = endTime - startTime;
-                const durationSec = (duration / 1000).toFixed(2);
-                
-                // Extract bet details from the slip
-                let actualPayout = null;
-                let actualOdds = null;
-                let outcomeTeam = null;
-                
-                const payoutEl = document.querySelector('[data-testid="single-bet-estimated-amount"]');
-                if (payoutEl) {
-                    const payoutMatch = payoutEl.textContent.match(/\$?([\d.]+)/);
-                    if (payoutMatch) actualPayout = payoutMatch[1];
-                }
-                
-                if (betOddsPayoutEl) {
-                    const oddsMatch = betOddsPayoutEl.textContent.match(/([\d.]+)/);
-                    if (oddsMatch) actualOdds = oddsMatch[1];
-                }
-                
-                if (betOutcomeLabel) {
-                    outcomeTeam = betOutcomeLabel.textContent.trim();
-                }
-                
-                console.log(`[Auto] ✅ BET PLACED SUCCESSFULLY! (Green checkmark detected)`);
-                console.log(`[Auto] Team: ${outcomeTeam || team}, Amount: $${amount}, Odds: ${actualOdds || odds}`);
-                console.log(`[Auto] Executed in ${duration}ms (${durationSec}s)`);
-                if (actualPayout) console.log(`[Auto] Est. Payout: $${actualPayout}`);
-                
-                // Send COMPLETED status with full details
-                chrome.runtime.sendMessage({ 
-                    action: "bet_placed_success", 
-                    team: outcomeTeam || team, 
-                    amount: amount, 
-                    odds: actualOdds || odds,
-                    duration: duration,
-                    durationSec: durationSec,
-                    payout: actualPayout,
-                    status: "COMPLETED",
-                    timestamp: new Date().toISOString()
-                });
-                
-                // Visual feedback - highlight the successful betslip
-                if (betSlip) {
-                    betSlip.style.border = "3px solid #00e676";
-                    betSlip.style.boxShadow = "0 0 15px #00e676";
-                }
-                if (greenCheckIcon) {
-                    const parent = greenCheckIcon.closest('span');
-                    if (parent) {
-                        parent.style.transform = "scale(1.5)";
-                        parent.style.transition = "transform 0.3s";
-                    }
-                }
-            } else {
-                // Keep checking - bet still processing
-                setTimeout(() => verifyBetPlaced(team, amount, odds, startTime, attempts + 1), 200);
-            }
-        };
-        
-        // Function to check for bet warnings/errors on Stake (no alerts, send to TG)
-        const checkBetWarnings = (team, amount, odds) => {
-            setTimeout(() => {
-                // Look for the warning/error message in system-message area
-                const warningEl = document.querySelector('.system-message.info, .system-message, [class*="system-message"]');
-                const warningText = warningEl ? warningEl.textContent.trim() : '';
-                const pageText = document.body.innerText;
-                
-                // Check for insufficient balance error
-                if (warningText.includes('cannot bet more than your balance') || 
-                    pageText.includes('cannot bet more than your balance')) {
-                    console.warn('[Auto] ⚠️ Insufficient balance detected!');
-                    chrome.runtime.sendMessage({ 
-                        action: "bet_error", 
-                        error: "Insufficient Balance",
-                        details: "You cannot bet more than your balance",
-                        team: team,
-                        amount: amount,
-                        odds: odds
-                    });
+            const checkResult = () => {
+                checkCount++;
+                if (checkCount > maxChecks) {
+                    console.log(`[Auto] ⏰ Monitoring timeout for ${team}`);
                     return;
                 }
                 
-                // Check for minimum bet warning
-                if (warningText.includes('Minimum bet amount') || pageText.includes('Minimum bet amount')) {
-                    const minMatch = pageText.match(/Minimum bet amount is[^\d]*([\d.,]+)/i);
-                    const minAmount = minMatch ? minMatch[1] : 'unknown';
+                // Stake-specific success/error selectors
+                const successIndicators = [
+                    '[data-testid="bet-success"]',
+                    '.bet-confirmation',
+                    '[class*="success"]',
+                    '[class*="confirmed"]'
+                ];
+                
+                const errorIndicators = [
+                    '[data-testid="bet-error"]',
+                    '[class*="error"]',
+                    '[class*="rejected"]'
+                ];
+                
+                let isSuccess = false;
+                let isError = false;
+                
+                for (const sel of successIndicators) {
+                    try {
+                        const el = document.querySelector(sel);
+                        if (el && el.offsetParent !== null) {
+                            isSuccess = true;
+                            break;
+                        }
+                    } catch (e) {}
+                }
+                
+                for (const sel of errorIndicators) {
+                    try {
+                        const el = document.querySelector(sel);
+                        if (el && el.offsetParent !== null) {
+                            isError = true;
+                            break;
+                        }
+                    } catch (e) {}
+                }
+                
+                if (isSuccess) {
+                    const profit = (amount * odds) - amount;
+                    console.log(`[Auto] ✅ WIN on Stake! Team: ${team}, Profit: $${profit.toFixed(4)}`);
                     
-                    console.warn(`[Auto] ⚠️ Minimum bet warning: ${minAmount}`);
-                    chrome.runtime.sendMessage({ 
-                        action: "stake_min_bet_warning", 
-                        team: team,
-                        enteredAmount: amount,
-                        minAmount: minAmount,
-                        odds: odds
+                    chrome.storage.local.get(['totalProfit', 'wins', 'betHistory'], (res) => {
+                        const totalProfit = (res.totalProfit || 0) + profit;
+                        const wins = (res.wins || 0) + 1;
+                        const betHistory = res.betHistory || [];
+                        
+                        betHistory.push({
+                            platform: 'stake',
+                            team: team,
+                            amount: amount,
+                            odds: odds,
+                            profit: profit,
+                            result: 'win',
+                            timestamp: Date.now()
+                        });
+                        
+                        chrome.storage.local.set({ 
+                            totalProfit: totalProfit,
+                            wins: wins,
+                            betHistory: betHistory
+                        });
+                        
+                        console.log(`[Auto] 💰 Total Profit: $${totalProfit.toFixed(4)}, Wins: ${wins}`);
                     });
-                    return;
-                }
-                
-                // Check for any other warning message
-                if (warningEl && warningText) {
-                    console.warn(`[Auto] ⚠️ Warning detected: ${warningText}`);
-                    chrome.runtime.sendMessage({ 
-                        action: "bet_error", 
-                        error: "Stake Warning",
-                        details: warningText,
+                    
+                    chrome.runtime.sendMessage({
+                        action: "bet_result",
+                        platform: 'stake',
                         team: team,
-                        amount: amount,
-                        odds: odds
+                        result: 'win',
+                        profit: profit
                     });
+                    
+                } else if (isError) {
+                    console.log(`[Auto] ❌ LOSS/ERROR on Stake for ${team}`);
+                    
+                    chrome.storage.local.get(['totalProfit', 'losses', 'betHistory'], (res) => {
+                        const totalProfit = (res.totalProfit || 0) - amount;
+                        const losses = (res.losses || 0) + 1;
+                        const betHistory = res.betHistory || [];
+                        
+                        betHistory.push({
+                            platform: 'stake',
+                            team: team,
+                            amount: amount,
+                            odds: odds,
+                            profit: -amount,
+                            result: 'loss',
+                            timestamp: Date.now()
+                        });
+                        
+                        chrome.storage.local.set({ 
+                            totalProfit: totalProfit,
+                            losses: losses,
+                            betHistory: betHistory
+                        });
+                        
+                        console.log(`[Auto] 📉 Total Profit: $${totalProfit.toFixed(4)}, Losses: ${losses}`);
+                    });
+                    
+                    chrome.runtime.sendMessage({
+                        action: "bet_result",
+                        platform: 'stake',
+                        team: team,
+                        result: 'loss',
+                        profit: -amount
+                    });
+                    
+                } else {
+                    setTimeout(checkResult, 500);
                 }
-            }, 500); // Check quickly for warnings
+            };
+            
+            setTimeout(checkResult, 1000);
         };
 
         checkAndClick(0);
@@ -991,8 +1615,10 @@ let isEnabled = true;
 let observer = null;
 
 // Initialize
-chrome.storage.local.get(['isEnabled', 'liveScanEnabled'], (result) => {
+chrome.storage.local.get(['isEnabled', 'liveScanEnabled', 'highlightEnabled'], (result) => {
     isEnabled = result.isEnabled !== false; // Default true
+    highlightEnabled = result.highlightEnabled !== false; // Default true
+    
     if (isEnabled) {
         runConverter();
         setTimeout(runConverter, 1000);

@@ -1,5 +1,4 @@
 importScripts('arbitrageLogic.js');
-importScripts('telegram.js');
 
 // 1. Listen for Messages
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
@@ -93,20 +92,52 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "open_and_click") {
         const { url, team, id } = request;
 
-        // Helper to trigger click with retry
-        const triggerClick = (tabId, retries = 3) => {
+        // Helper to inject content script and then trigger click
+        const injectAndClick = async (tabId) => {
             const amount = request.amount;
             const expectedOdds = request.expectedOdds;
-            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id, amount: amount, expectedOdds: expectedOdds }, (response) => {
+            
+            try {
+                // First, try to inject the content script (in case it's not loaded)
+                await chrome.scripting.executeScript({
+                    target: { tabId: tabId },
+                    files: ['content.js']
+                });
+                console.log("Content script injected successfully");
+            } catch (e) {
+                console.log("Script injection note:", e.message);
+                // Script might already be loaded, continue anyway
+            }
+            
+            // Small delay after injection
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+            // Now send the click command
+            triggerClick(tabId, 5);
+        };
+
+        // Helper to trigger click with retry
+        const triggerClick = (tabId, retries = 5) => {
+            const amount = request.amount;
+            const expectedOdds = request.expectedOdds;
+            chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id, amount: amount, expectedOdds: expectedOdds, retryLimit: 5 }, (response) => {
                 const err = chrome.runtime.lastError;
                 if (err) {
-                    // Ignore "port closed" error as it usually means listener existed but closed (success-ish)
-                    // But if we want to be strict, we only retry on meaningful connection errors
                     console.log("Msg error:", err.message);
 
                     if (retries > 0 && !err.message.includes("closed before a response")) {
-                        console.log("Retrying click in 500ms...");
+                        console.log(`Retrying click in 500ms... (${retries} left)`);
                         setTimeout(() => triggerClick(tabId, retries - 1), 500);
+                    } else {
+                        console.log("All retries exhausted");
+                        // Notify user
+                        chrome.notifications.create({
+                            type: 'basic',
+                            iconUrl: 'icon.png',
+                            title: 'Click Failed',
+                            message: `Could not click ${team} button. Try refreshing the page.`,
+                            priority: 2
+                        });
                     }
                 } else {
                     console.log("Click command sent & acknowledged");
@@ -119,8 +150,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             const existingTab = tabs.find(t => t.url === url || t.url.includes(url));
             if (existingTab) {
                 chrome.tabs.update(existingTab.id, { active: true }, () => {
-                    // Wait a bit for focus
-                    setTimeout(() => triggerClick(existingTab.id), 1000);
+                    // Wait a bit for focus, then inject and click
+                    setTimeout(() => injectAndClick(existingTab.id), 800);
                 });
             } else {
                 chrome.tabs.create({ url: url, active: true }, (newTab) => {
@@ -128,122 +159,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     const listener = (tabId, changeInfo) => {
                         if (tabId === newTab.id && changeInfo.status === 'complete') {
                             chrome.tabs.onUpdated.removeListener(listener);
-                            setTimeout(() => triggerClick(newTab.id), 2000);
+                            // Give page more time to render (React apps take longer)
+                            setTimeout(() => injectAndClick(newTab.id), 3000);
                         }
                     };
                     chrome.tabs.onUpdated.addListener(listener);
                 });
             }
         });
-        return true;
-    }
-    
-    // Handle Stake Minimum Bet Warning - Send TG notification
-    if (request.action === "stake_min_bet_warning") {
-        chrome.storage.local.get(['tgBotToken', 'tgChatId'], (res) => {
-            const token = res.tgBotToken;
-            const chatId = res.tgChatId;
-            
-            if (token && chatId) {
-                const message = 
-                    `⚠️ *Stake Minimum Bet Warning*\n\n` +
-                    `*Team:* ${request.team}\n` +
-                    `*Entered:* ${request.enteredAmount}\n` +
-                    `*Minimum Required:* ₹${request.minAmount}\n` +
-                    `*Odds:* ${request.odds}\n` +
-                    `_Time: ${new Date().toLocaleTimeString()}_`;
-                
-                const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(message)}&parse_mode=Markdown`;
-                
-                fetch(url)
-                    .then(r => r.json())
-                    .then(data => {
-                        console.log("[TG] Min bet warning sent:", data.ok);
-                    })
-                    .catch(e => console.error("[TG] Failed to send min bet warning:", e));
-            }
-        });
-        return true;
-    }
-    
-    // Handle general bet errors - Send TG notification and store in history
-    if (request.action === "bet_error") {
-        console.warn(`[Bet Error] ${request.error}: ${request.details}`);
-        
-        chrome.storage.local.get(['tgBotToken', 'tgChatId', 'betHistory'], (res) => {
-            const token = res.tgBotToken;
-            const chatId = res.tgChatId;
-            let history = res.betHistory || [];
-            
-            // Find and update any PENDING entry for this team
-            if (request.team) {
-                const pendingIndex = history.findIndex(h => 
-                    h.status === 'PENDING' && 
-                    h.team === request.team
-                );
-                
-                // Create error entry
-                const entry = {
-                    id: pendingIndex >= 0 ? history[pendingIndex].id : Date.now(),
-                    team: request.team || 'Unknown',
-                    odds: request.odds || '-',
-                    amount: request.amount || '-',
-                    status: 'ERROR',
-                    reason: `${request.error}: ${request.details}`,
-                    timestamp: new Date().toISOString(),
-                    source: 'stake'
-                };
-                
-                if (pendingIndex >= 0) {
-                    history[pendingIndex] = entry;
-                } else {
-                    history.unshift(entry);
-                    if (history.length > 100) history.pop();
-                }
-                
-                chrome.storage.local.set({ betHistory: history });
-            }
-            
-            // Send to Telegram
-            if (token && chatId) {
-                let emoji = '⚠️';
-                if (request.error === 'Insufficient Balance') emoji = '💰';
-                else if (request.error === 'Max retries reached') emoji = '🔄';
-                
-                const message = 
-                    `${emoji} *Bet Error*\n\n` +
-                    `*Error:* ${request.error}\n` +
-                    `*Details:* ${request.details}\n` +
-                    (request.team ? `*Team:* ${request.team}\n` : '') +
-                    (request.amount ? `*Amount:* $${request.amount}\n` : '') +
-                    (request.odds ? `*Odds:* ${request.odds}\n` : '') +
-                    `_Time: ${new Date().toLocaleTimeString()}_`;
-                
-                const url = `https://api.telegram.org/bot${token}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(message)}&parse_mode=Markdown`;
-                
-                fetch(url)
-                    .then(r => r.json())
-                    .then(data => {
-                        console.log("[TG] Bet error notification sent:", data.ok);
-                    })
-                    .catch(e => console.error("[TG] Failed to send bet error:", e));
-            }
-        });
-        
-        // Show Chrome notification for errors
-        try {
-            chrome.notifications.create(`bet-error-${Date.now()}`, {
-                type: 'basic',
-                iconUrl: 'icon.png',
-                title: `⚠️ ${request.error}`,
-                message: request.details,
-                priority: 2,
-                requireInteraction: false
-            });
-        } catch (e) {
-            console.log("[Notification] Error:", e);
-        }
-        
         return true;
     }
 });
@@ -507,6 +430,24 @@ function handleNewData(newData) {
             chrome.storage.local.set({ stackData: newData });
         }
 
+        // Always highlight teams on data update (for visual team identification)
+        if (newData.odds && newData.odds.length >= 2) {
+            const highlightTargets = newData.odds.map((o, idx) => ({
+                team: o.team,
+                type: newData.type === 'polymarket' ? 'polymarket' : 'stack',
+                teamIndex: idx % 2  // Alternate: 0 = Pink, 1 = Orange
+            }));
+            
+            // Send highlight to all tabs
+            chrome.tabs.query({}, (tabs) => {
+                tabs.forEach(t => {
+                    try {
+                        chrome.tabs.sendMessage(t.id, { action: "highlight_odds", targets: highlightTargets });
+                    } catch(e) {}
+                });
+            });
+        }
+
         if (poly && stack && poly.odds && stack.odds) {
             const opportunities = ArbitrageCalculator.findOpportunities(poly.odds, stack.odds, strictMatch);
 
@@ -514,7 +455,7 @@ function handleNewData(newData) {
                 // Determine if we should notify
                 if (result.monitoringState && result.monitoringState.active) {
 
-                    // 1. Prepare Highlight Targets
+                    // 1. Prepare Highlight Targets with team colors
                     const targets = [];
                     opportunities.forEach(op => {
                         const parts = op.betOn.split(' / ');
@@ -522,18 +463,20 @@ function handleNewData(newData) {
                             const p1 = parts[0].match(/(.*) \((.*)\)/);
                             const p2 = parts[1].match(/(.*) \((.*)\)/);
 
-                            if (p1) targets.push({ team: p1[1].trim(), type: p1[2].toLowerCase() === 'poly' ? 'polymarket' : 'stack' });
-                            if (p2) targets.push({ team: p2[1].trim(), type: p2[2].toLowerCase() === 'poly' ? 'polymarket' : 'stack' });
+                            if (p1) targets.push({ team: p1[1].trim(), type: p1[2].toLowerCase() === 'poly' ? 'polymarket' : 'stack', teamIndex: 0 }); // Team 1 = Pink
+                            if (p2) targets.push({ team: p2[1].trim(), type: p2[2].toLowerCase() === 'poly' ? 'polymarket' : 'stack', teamIndex: 1 }); // Team 2 = Orange
                         }
                     });
 
-                    // 2. Broadcast Highlighting
+                    // 2. Broadcast Highlighting to ALL tabs with Stake or Polymarket
                     if (targets.length > 0) {
                         try {
-                            chrome.tabs.sendMessage(result.monitoringState.tabId, { action: "highlight_odds", targets: targets });
-                            chrome.tabs.query({ active: true }, (tabs) => {
+                            // Send to all tabs
+                            chrome.tabs.query({}, (tabs) => {
                                 tabs.forEach(t => {
-                                    chrome.tabs.sendMessage(t.id, { action: "highlight_odds", targets: targets });
+                                    try {
+                                        chrome.tabs.sendMessage(t.id, { action: "highlight_odds", targets: targets });
+                                    } catch(e) {}
                                 });
                             });
                         } catch (e) {
@@ -719,142 +662,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true; // async
     }
 
-    // Handle PENDING status - bet is being processed
-    if (request.action === "bet_status_update" && request.status === "PENDING") {
-        chrome.storage.local.get(['betHistory'], (result) => {
-            const history = result.betHistory || [];
-            
-            // Create pending entry
-            const entry = {
-                id: Date.now(),
-                team: request.team,
-                odds: request.odds,
-                amount: request.amount,
-                duration: 0,
-                status: 'PENDING',
-                timestamp: request.timestamp || new Date().toISOString(),
-                source: 'stake'
-            };
-            
-            // Add to history
-            history.unshift(entry);
-            if (history.length > 100) history.pop();
-            
-            chrome.storage.local.set({ betHistory: history });
-            console.log(`[BetHistory] ⏳ PENDING: ${entry.team} @ ${entry.odds} | $${entry.amount}`);
-        });
-    }
-
     if (request.action === "bet_placed_success") {
-        // Store in bet history - update PENDING to COMPLETED
-        chrome.storage.local.get(['betHistory', 'tgBotToken', 'tgChatId'], (result) => {
-            let history = result.betHistory || [];
-            
-            // Find and update the PENDING entry for this bet, or create new
-            const pendingIndex = history.findIndex(h => 
-                h.status === 'PENDING' && 
-                h.team === request.team && 
-                h.amount === request.amount
-            );
-            
-            const entry = {
-                id: pendingIndex >= 0 ? history[pendingIndex].id : Date.now(),
-                team: request.team,
-                odds: request.odds,
-                amount: request.amount,
-                duration: request.duration || 0,
-                durationSec: request.durationSec || '0',
-                payout: request.payout || null,
-                status: request.status || 'COMPLETED',
-                timestamp: request.timestamp || new Date().toISOString(),
-                source: 'stake'
-            };
-            
-            if (pendingIndex >= 0) {
-                // Update existing pending entry
-                history[pendingIndex] = entry;
-            } else {
-                // Add new entry
-                history.unshift(entry);
-                if (history.length > 100) history.pop();
-            }
-            
-            // Save history
-            chrome.storage.local.set({ betHistory: history });
-            
-            console.log(`[BetHistory] ✅ COMPLETED: ${entry.team} @ ${entry.odds} | $${entry.amount} | ${entry.duration}ms`);
-            
-            // Send Telegram notification
+        chrome.storage.local.get(['tgBotToken', 'tgChatId'], (result) => {
             const botToken = result.tgBotToken;
             const chatId = result.tgChatId;
             if (botToken && chatId) {
-                const durationStr = entry.duration > 1000 
-                    ? `${(entry.duration/1000).toFixed(2)}s` 
-                    : `${entry.duration}ms`;
-                    
-                const msg = `✅ *BET PLACED SUCCESSFULLY*\n\n` +
-                    `🎯 Team: ${request.team}\n` +
-                    `📊 Odds: ${request.odds}\n` +
-                    `💰 Amount: $${request.amount}\n` +
-                    `${request.payout ? `💵 Est. Payout: $${request.payout}\n` : ''}` +
-                    `⏱️ Executed in: ${durationStr}\n` +
-                    `\n_${new Date().toLocaleTimeString()}_`;
-                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`;
-                fetch(url).catch(e => console.error("TG Send Fail", e));
-            }
-        });
-    }
-    
-    if (request.action === "bet_placed_failed") {
-        // Store failed bet in history - update PENDING to FAILED
-        chrome.storage.local.get(['betHistory', 'tgBotToken', 'tgChatId'], (result) => {
-            let history = result.betHistory || [];
-            
-            // Find and update the PENDING entry
-            const pendingIndex = history.findIndex(h => 
-                h.status === 'PENDING' && 
-                h.team === request.team && 
-                h.amount === request.amount
-            );
-            
-            // Create history entry for failed bet
-            const entry = {
-                id: pendingIndex >= 0 ? history[pendingIndex].id : Date.now(),
-                team: request.team,
-                odds: request.odds,
-                amount: request.amount,
-                duration: request.duration || 0,
-                status: 'FAILED',
-                reason: request.reason || 'Unknown error',
-                timestamp: new Date().toISOString(),
-                source: 'stake'
-            };
-            
-            if (pendingIndex >= 0) {
-                // Update existing pending entry
-                history[pendingIndex] = entry;
-            } else {
-                // Add new entry
-                history.unshift(entry);
-                if (history.length > 100) history.pop();
-            }
-            
-            chrome.storage.local.set({ betHistory: history });
-            
-            console.log(`[BetHistory] ❌ FAILED: ${entry.team} - ${entry.reason}`);
-            
-            // Send Telegram notification for failure
-            const botToken = result.tgBotToken;
-            const chatId = result.tgChatId;
-            if (botToken && chatId) {
-                const msg = `❌ *BET PLACEMENT FAILED*\n\n` +
-                    `🎯 Team: ${request.team}\n` +
-                    `📊 Odds: ${request.odds}\n` +
-                    `💰 Amount: $${request.amount}\n` +
-                    `⚠️ Reason: ${request.reason}\n` +
-                    `⏱️ Duration: ${request.duration}ms\n` +
-                    `\n_${new Date().toLocaleTimeString()}_`;
-                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}&parse_mode=Markdown`;
+                const msg = `✅ BET SLIP FILLED (Auto)\n\n` +
+                    `Team: ${request.team}\n` +
+                    `Odds Verified: ${request.odds}\n` +
+                    `Amount: ${request.amount || '0.01'}\n` +
+                    `\nPlease confirm manually!`;
+                const url = `https://api.telegram.org/bot${botToken}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(msg)}`;
                 fetch(url).catch(e => console.error("TG Send Fail", e));
             }
         });
