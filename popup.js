@@ -685,8 +685,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 tbody tr:hover { background-color: #f0f0f0; }
                 /* Buttons */
                 .bet-btn { border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 10px; margin: 2px; color: white; display: inline-block; text-decoration: none; }
-                .poly-btn { background-color: #29b6f6; }
-                .stake-btn { background-color: #00bfa5; }
+                .team1-btn { background-color: #9b59b6; } /* Purple for Team 1 */
+                .team2-btn { background-color: #e91e63; } /* Pink for Team 2 */
                 .bet-btn:hover { opacity: 0.8; }
                 .bet-btn:disabled { opacity: 0.3; cursor: not-allowed; filter: grayscale(100%); }
                 .stake-display { display: block; font-size: 9px; font-weight: bold; color: #27ae60; margin-top: 2px; }
@@ -696,10 +696,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <thead>
                     <tr>
                         <th>Match</th>
-                        <th style="color:#29b6f6">Poly H</th>
-                        <th style="color:#29b6f6">Poly A</th>
-                        <th style="color:#00bfa5">Stake H</th>
-                        <th style="color:#00bfa5">Stake A</th>
+                        <th style="color:#9b59b6">Poly H</th>
+                        <th style="color:#e91e63">Poly A</th>
+                        <th style="color:#9b59b6">Stake H</th>
+                        <th style="color:#e91e63">Stake A</th>
                         <th>Arb 1 (P_H/S_A)</th>
                         <th>Arb 2 (P_A/S_H)</th>
                         <th>Combined</th>
@@ -1003,14 +1003,14 @@ document.addEventListener('DOMContentLoaded', () => {
                                 ` : '-'}
                             </td>
 
-                             <td style="text-align: left; min-width: 140px;">
+                            <td style="text-align: left; min-width: 140px;">
                                 <div style="margin-bottom:3px; display:flex; gap:2px;">
-                                    <button class="bet-btn poly-btn" ${p1Disabled} style="${styleP_Home}" data-link="${home.link}" data-id="${home.id}" data-stake="${testMode ? testAmount : s1_home_val}" data-odds="${home.odds}">P: ${trunc(home.team)}</button>
-                                    <button class="bet-btn poly-btn" ${p2Disabled} style="${styleP_Away}" data-link="${away.link}" data-id="${away.id}" data-stake="${testMode ? testAmount : s2_home_val}" data-odds="${away.odds}">P: ${trunc(away.team)}</button>
+                                    <button class="bet-btn team1-btn" ${p1Disabled} style="${styleP_Home}" data-link="${home.link}" data-id="${home.id}" data-stake="${testMode ? testAmount : s1_home_val}" data-odds="${home.odds}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn team2-btn" ${p2Disabled} style="${styleP_Away}" data-link="${away.link}" data-id="${away.id}" data-stake="${testMode ? testAmount : s2_home_val}" data-odds="${away.odds}">P: ${trunc(away.team)}</button>
                                 </div>
                                 <div style="display:flex; gap:2px;">
-                                    <button class="bet-btn stake-btn" ${s1Disabled} style="${styleS_Home}" data-link="${stakeHome.link}" data-stake="${testMode ? testAmount : s2_away_val}" data-odds="${stakeHome.odds}">S: ${trunc(stakeHome.team)}</button>
-                                    <button class="bet-btn stake-btn" ${s2Disabled} style="${styleS_Away}" data-link="${stakeAway.link}" data-stake="${testMode ? testAmount : s1_away_val}" data-odds="${stakeAway.odds}">S: ${trunc(stakeAway.team)}</button>
+                                    <button class="bet-btn team1-btn" ${s1Disabled} style="${styleS_Home}" data-link="${stakeHome.link}" data-stake="${testMode ? testAmount : s2_away_val}" data-odds="${stakeHome.odds}">S: ${trunc(stakeHome.team)}</button>
+                                    <button class="bet-btn team2-btn" ${s2Disabled} style="${styleS_Away}" data-link="${stakeAway.link}" data-stake="${testMode ? testAmount : s1_away_val}" data-odds="${stakeAway.odds}">S: ${trunc(stakeAway.team)}</button>
                                 </div>
                                 <div style="margin-top:4px; text-align:right;">
                                     <button class="debug-btn" data-debug='${JSON.stringify({ home, away, stakeHome, stakeAway })}' style="border:none; background:none; cursor:pointer;" title="Send to TG Debug">

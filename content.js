@@ -5,27 +5,27 @@
     style.id = 'arb-highlight-styles';
     style.textContent = `
         [data-arb-highlight="team1"] {
+            border: 3px solid #9b59b6 !important;
+            box-shadow: 0 0 15px rgba(155, 89, 182, 0.6), 0 0 25px rgba(155, 89, 182, 0.4) !important;
+            background-color: rgba(155, 89, 182, 0.1) !important;
+            transition: all 0.3s ease !important;
+        }
+        [data-arb-highlight="team2"] {
             border: 3px solid #e91e63 !important;
             box-shadow: 0 0 15px rgba(233, 30, 99, 0.6), 0 0 25px rgba(233, 30, 99, 0.4) !important;
             background-color: rgba(233, 30, 99, 0.1) !important;
             transition: all 0.3s ease !important;
         }
-        [data-arb-highlight="team2"] {
-            border: 3px solid #ff9800 !important;
-            box-shadow: 0 0 15px rgba(255, 152, 0, 0.6), 0 0 25px rgba(255, 152, 0, 0.4) !important;
-            background-color: rgba(255, 152, 0, 0.1) !important;
-            transition: all 0.3s ease !important;
-        }
         [data-arb-highlight="arb1"] {
-            border: 3px solid #e91e63 !important;
+            border: 3px solid #9b59b6 !important;
             box-shadow: 0 0 15px rgba(0, 230, 118, 0.8), 0 0 30px rgba(0, 230, 118, 0.5) !important;
-            background-color: rgba(233, 30, 99, 0.15) !important;
+            background-color: rgba(155, 89, 182, 0.15) !important;
             animation: arbPulse 1.5s ease-in-out infinite !important;
         }
         [data-arb-highlight="arb2"] {
-            border: 3px solid #ff9800 !important;
+            border: 3px solid #e91e63 !important;
             box-shadow: 0 0 15px rgba(0, 230, 118, 0.8), 0 0 30px rgba(0, 230, 118, 0.5) !important;
-            background-color: rgba(255, 152, 0, 0.15) !important;
+            background-color: rgba(233, 30, 99, 0.15) !important;
             animation: arbPulse 1.5s ease-in-out infinite !important;
         }
         @keyframes arbPulse {
