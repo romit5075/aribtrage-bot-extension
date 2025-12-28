@@ -39,6 +39,51 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
         }
+        else if (e.target.closest('.combo-btn')) {
+            // Combined Action: Click Poly + Stake
+            try {
+                const btn = e.target.closest('.combo-btn');
+                const polyAttr = btn.getAttribute('data-poly');
+                const stakeAttr = btn.getAttribute('data-stake');
+
+                if (!polyAttr || !stakeAttr) {
+                    alert("Error: Missing bet data attributes.");
+                    return;
+                }
+
+                const dataPoly = JSON.parse(polyAttr);
+                const dataStake = JSON.parse(stakeAttr);
+
+                // console.log("Combo Bet Triggered:", dataPoly, dataStake); 
+                // Uncomment to debug if needed, but alert is better for user
+
+                if (dataPoly && dataStake) {
+                    // Send combined action to background to handle orchestration
+                    // This prevents popup closing from killing the second bet
+                    chrome.runtime.sendMessage({
+                        action: "combined_bet",
+                        poly: {
+                            url: dataPoly.link,
+                            team: dataPoly.team,
+                            id: dataPoly.id,
+                            amount: dataPoly.stake,
+                            expectedOdds: dataPoly.odds
+                        },
+                        stake: {
+                            url: dataStake.link,
+                            team: dataStake.team,
+                            expectedOdds: dataStake.odds,
+                            amount: dataStake.stake
+                        }
+                    });
+                } else {
+                    alert("Error: Invalid bet data.");
+                }
+            } catch (err) {
+                alert("Combo Button Error: " + err.message);
+                console.error(err);
+            }
+        }
         else if (e.target.classList.contains('bet-btn')) {
             const url = e.target.getAttribute('data-link');
             // Extract team name from button text "P: CHA" -> "CHA"
@@ -219,7 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const tabs = await chrome.tabs.query({});
             for (const tab of tabs) {
                 if (tab.url && (
-                    tab.url.includes('stake.com') || 
+                    tab.url.includes('stake.com') ||
                     tab.url.includes('stake.us') ||
                     tab.url.includes('polymarket.com') ||
                     tab.url.includes('sx.bet')
@@ -231,6 +276,46 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
             }
+        });
+    }
+
+    // --- Test Mode Toggle Logic ---
+    const toggleTestMode = document.getElementById('toggleTestMode');
+    const testAmountInput = document.getElementById('testAmountInput');
+    const testModeLabel = document.getElementById('testModeLabel'); // "TEST" label
+
+    function updateTestModeUI(isActive) {
+        if (toggleTestMode) toggleTestMode.checked = isActive;
+        if (testAmountInput) {
+            testAmountInput.style.display = isActive ? 'inline-block' : 'none';
+        }
+        if (testModeLabel) {
+            testModeLabel.style.color = isActive ? '#e67e22' : '#95a5a6'; // Orange for Test
+        }
+    }
+
+    chrome.storage.local.get(['testMode', 'testAmount'], (result) => {
+        const isTest = result.testMode === true;
+        updateTestModeUI(isTest);
+        if (testAmountInput && result.testAmount) {
+            testAmountInput.value = result.testAmount;
+        }
+    });
+
+    if (toggleTestMode) {
+        toggleTestMode.addEventListener('change', (e) => {
+            const isTest = e.target.checked;
+            updateTestModeUI(isTest);
+            chrome.storage.local.set({ testMode: isTest }, () => {
+                updateUI();
+            });
+        });
+    }
+
+    if (testAmountInput) {
+        testAmountInput.addEventListener('change', (e) => {
+            const val = parseFloat(e.target.value);
+            chrome.storage.local.set({ testAmount: val });
         });
     }
 
@@ -260,7 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const tabs = await chrome.tabs.query({});
             for (const tab of tabs) {
                 if (tab.url && (
-                    tab.url.includes('stake.com') || 
+                    tab.url.includes('stake.com') ||
                     tab.url.includes('stake.us') ||
                     tab.url.includes('polymarket.com') ||
                     tab.url.includes('sx.bet')
@@ -543,11 +628,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateUI() {
-        chrome.storage.local.get(['polymarketData', 'stackData', 'strictMatch', 'stakeAmount', 'liveScanEnabled'], (result) => {
+        chrome.storage.local.get(['polymarketData', 'stackData', 'strictMatch', 'stakeAmount', 'liveScanEnabled', 'testMode', 'testAmount'], (result) => {
             const poly = result.polymarketData;
             const stack = result.stackData;
             const stakeAmt = result.stakeAmount || 100; // Default 100 if not set
             const isLive = result.liveScanEnabled === true;
+            const testMode = result.testMode === true;
+            const testAmount = result.testAmount || 1; // Default $1 for test
 
             let html = '';
 
@@ -556,9 +643,10 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 const now = new Date().toLocaleTimeString();
                 const liveIndicator = isLive ? '<span style="color:#27ae60; font-weight:bold;">● LIVE</span>' : '';
-                
+                const modeIndicator = testMode ? '<span style="color:#e67e22; font-weight:bold; margin-left:5px;">[TEST MODE]</span>' : '';
+
                 if (poly) {
-                    html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams ${liveIndicator} <span style="margin-left:10px; color:#3498db;">Updated: ${now}</span></p>`;
+                    html += `<p style="font-size:10px; color:#aaa;">Poly Data: ${poly.odds.length} teams ${liveIndicator} ${modeIndicator} <span style="margin-left:10px; color:#3498db;">Updated: ${now}</span></p>`;
                 }
                 if (stack) {
                     html += `<p style="font-size:10px; color:#aaa;">Stake Data: ${stack.odds.length} teams</p>`;
@@ -567,16 +655,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (poly && stack) {
                     // Get strict setting
                     const isStrict = result.strictMatch === true;
-                    html += generateArbitrageTable(poly.odds, stack.odds, isStrict, stakeAmt);
+                    html += generateArbitrageTable(poly.odds, stack.odds, isStrict, stakeAmt, testMode, testAmount);
                 }
             }
             if (resultsArea) resultsArea.innerHTML = html;
         });
     }
 
-    function generateArbitrageTable(polyOdds, stackOdds, strictMatch, stakeAmount) {
+    function generateArbitrageTable(polyOdds, stackOdds, strictMatch, stakeAmount, testMode, testAmount) {
         // Goal Table Format:
-        // Match (e.g. HOU-DEN) | Poly HOU | Poly DEN | Stake HOU | Stake DEN | Arb % (P-HOU/S-DEN) | Arb % (P-DEN/S-HOU)
+        // Match (e.g. HOU-DEN) | Poly HOU | Poly DEN | Stake HOU | Stake DEN | Arb % (P-HOU/S-DEN) | Arb % (P-DEN/S-HOU) | Combined
+
+        // If Test Mode is ON, use testAmount for calculations/display or just for the button data?
+        // Usually, stakeAmount is for calculation. testAmount is for execution.
+        // Let's keep calculation on stakeAmount (User's real payroll view), but Execution uses testAmount?
+        // User said: "amount user can configure"
+
+        // Let's use testAmount if testMode is ON for the BUTTON DATA, but display calculation based on stakeAmount?
+        // Actually, if testing, maybe we want to see small amounts?
+        // Let's use stakeAmount for the breakdown display, but override the click data with testAmount.
 
         let tableHtml = `
             <style>
@@ -591,7 +688,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 .poly-btn { background-color: #29b6f6; }
                 .stake-btn { background-color: #00bfa5; }
                 .bet-btn:hover { opacity: 0.8; }
+                .bet-btn:disabled { opacity: 0.3; cursor: not-allowed; filter: grayscale(100%); }
                 .stake-display { display: block; font-size: 9px; font-weight: bold; color: #27ae60; margin-top: 2px; }
+                .disabled-row { opacity: 0.6; background-color: #f2f2f2 !important; }
             </style>
             <table>
                 <thead>
@@ -603,6 +702,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <th style="color:#00bfa5">Stake A</th>
                         <th>Arb 1 (P_H/S_A)</th>
                         <th>Arb 2 (P_A/S_H)</th>
+                        <th>Combined</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -695,12 +795,57 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         };
 
-        // Iterate Poly items in pairs.
-        for (let i = 0; i < polyOdds.length - 1; i += 2) {
-            const home = polyOdds[i];
-            const away = polyOdds[i + 1];
+        // Iterate Poly items, handling potential 3-way markets (Home, Draw, Away)
+        let i = 0;
+        while (i < polyOdds.length - 1) {
+            let home = polyOdds[i];
+            let next = polyOdds[i + 1];
 
-            // Find corresponding team in Stake.
+            let away = next;
+            let isDraw = false;
+            let step = 2; // Default step for 2-way
+
+            // Check if 'next' is a Draw/Tie option
+            if (next.team.toUpperCase() === 'DRAW' || next.team.toUpperCase() === 'TIE') {
+                isDraw = true;
+                // If it's a draw, the Real Away team should be the next one
+                if (i + 2 < polyOdds.length) {
+                    away = polyOdds[i + 2];
+                    step = 3; // Consume 3 items
+                } else {
+                    // Malformed or end of list
+                    step = 2; // Skip this pair I guess
+                }
+            }
+
+            // If Draw detected, disable/skip matching
+            if (isDraw) {
+                // Render DISABLED ROW
+                const trunc = (str) => str.length > 4 ? str.substring(0, 4) : str;
+                tableHtml += `
+                    <tr class="disabled-row">
+                        <td title="${home.team} vs ${away.team}">
+                            <b>${home.team}</b> vs <b>${away.team}</b>
+                            <br/><span style="font-size:9px;color:#e74c3c">Draw Market - Disabled</span>
+                        </td>
+                        <td style="color:#aaa">${home.odds}</td>
+                        <td style="color:#aaa">${away.odds}</td>
+                        <td style="color:#aaa">-</td>
+                        <td style="color:#aaa">-</td>
+                        <td style="color:#aaa">-</td>
+                        <td style="color:#aaa">-</td>
+                        <td>-</td>
+                         <td style="text-align: left;">
+                            <button class="bet-btn poly-btn" disabled>P: ${trunc(home.team)}</button>
+                            <button class="bet-btn poly-btn" disabled>P: ${trunc(away.team)}</button>
+                        </td>
+                    </tr>`;
+
+                i += step;
+                continue;
+            }
+
+            // Normal 2-Way Matching Logic
             const stakeHome = findOdds(stackOdds, home.team);
             const stakeAway = findOdds(stackOdds, away.team);
 
@@ -722,20 +867,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     tableHtml += `
                         <tr>
-                            <td><b>${home.team}</b><br/><span style="font-size:9px;color:#aaa">${stakeHome.team}</span></td>
+                            <td title="${home.team} vs ${away.team} (Stack: ${stakeHome.team} vs ${stakeAway.team})">
+                                <b>${home.team}</b><br/><span style="font-size:9px;color:#aaa">${stakeHome.team}</span>
+                            </td>
                             <td style="color:${isSuspended(home.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(home.odds)}</td>
                             <td style="color:${isSuspended(away.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(away.odds)}</td>
                             <td style="color:${isSuspended(stakeHome.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(stakeHome.odds)}</td>
                             <td style="color:${isSuspended(stakeAway.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(stakeAway.odds)}</td>
+                            <td style="color:${isSuspended(stakeAway.odds) ? '#95a5a6' : 'inherit'}">${formatOdds(stakeAway.odds)}</td>
                             <td colspan="2" style="font-size:10px; color:#95a5a6">-</td>
+                            <td>-</td>
                              <td style="text-align: left;">
                                 <div style="margin-bottom:2px">
-                                    <button class="bet-btn poly-btn" data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
-                                    <button class="bet-btn poly-btn" data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
+                                    <button class="bet-btn poly-btn" disabled data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn poly-btn" disabled data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
                                 </div>
                                 <div>
-                                    <button class="bet-btn stake-btn" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
-                                    <button class="bet-btn stake-btn" data-link="${stakeAway.link}">S: ${trunc(stakeAway.team)}</button>
+                                    <button class="bet-btn stake-btn" disabled data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
+                                    <button class="bet-btn stake-btn" disabled data-link="${stakeAway.link}">S: ${trunc(stakeAway.team)}</button>
                                 </div>
                             </td>
                         </tr>`;
@@ -771,18 +920,34 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
 
-                    // Button Styles
+                    // Button Styles & Enabling Logic
+                    // Enable if arb > 0 OR if Test Mode is ON
+                    const arb1Positive = arb1.profit > 0;
+                    const arb2Positive = arb2.profit > 0;
+
+                    // Test Mode Force Enable
+                    const enableArb1 = arb1Positive || testMode;
+                    const enableArb2 = arb2Positive || testMode;
+
                     // Arb 1 Winner Pair: Poly Home + Stake Away
-                    const styleP_Home = arb1.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
-                    const styleS_Away = arb1.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
+                    // If enabled via Test Mode only (and not profit), show orange border
+                    const styleP_Home = enableArb1 ? (testMode && !arb1Positive ? 'border: 2px solid #e67e22 !important;' : 'border: 2px solid #e74c3c !important; font-weight:bold;') : '';
+                    const styleS_Away = enableArb1 ? (testMode && !arb1Positive ? 'border: 2px solid #e67e22 !important;' : 'border: 2px solid #e74c3c !important; font-weight:bold;') : '';
 
                     // Arb 2 Winner Pair: Poly Away + Stake Home
-                    const styleP_Away = arb2.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
-                    const styleS_Home = arb2.profit > 0 ? 'border: 2px solid #e74c3c !important; font-weight:bold;' : '';
+                    const styleP_Away = enableArb2 ? (testMode && !arb2Positive ? 'border: 2px solid #e67e22 !important;' : 'border: 2px solid #e74c3c !important; font-weight:bold;') : '';
+                    const styleS_Home = enableArb2 ? (testMode && !arb2Positive ? 'border: 2px solid #e67e22 !important;' : 'border: 2px solid #e74c3c !important; font-weight:bold;') : '';
+
+                    // Disable buttons if NOT enabled (neither profitable nor test mode)
+                    const p1Disabled = !enableArb1 ? 'disabled' : '';
+                    const s2Disabled = !enableArb1 ? 'disabled' : '';
+
+                    const p2Disabled = !enableArb2 ? 'disabled' : '';
+                    const s1Disabled = !enableArb2 ? 'disabled' : '';
 
                     tableHtml += `
                         <tr>
-                            <td>
+                            <td title="${home.team} vs ${away.team} (Stack: ${stakeHome.team} and ${stakeAway.team})">
                                 <b>${home.team}</b> vs <b>${away.team}</b>
                                 ${home.team !== stakeHome.team ? `<br/><span style="font-size:9px;color:#f39c12">Match: ${stakeHome.team}</span>` : ''}
                             </td>
@@ -813,14 +978,39 @@ document.addEventListener('DOMContentLoaded', () => {
                             
                             <td class="${arb1.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb1.profit.toFixed(2)}%</td>
                             <td class="${arb2.profit > 0 ? 'arb-profit' : 'arb-loss'}">${arb2.profit.toFixed(2)}%</td>
+                            
+                             <!-- Combined Action Column -->
+                            <td style="text-align:center;">
+                                ${enableArb1 ? `
+                                    <button class="combo-btn" 
+                                        ${testMode ? '' : 'disabled'} 
+                                        style="background:${testMode ? '#e67e22' : '#ccc'}; color:white; border:none; border-radius:4px; padding:4px 6px; cursor:${testMode ? 'pointer' : 'not-allowed'}; font-size:9px; margin-bottom:2px;"
+                                        data-poly='${JSON.stringify({ link: home.link, team: home.team, id: home.id, odds: home.odds, stake: testMode ? testAmount : s1_home_val }).replace(/'/g, "&apos;")}'
+                                        data-stake='${JSON.stringify({ link: stakeAway.link, team: stakeAway.team, odds: stakeAway.odds, stake: testMode ? testAmount : s1_away_val }).replace(/'/g, "&apos;")}'
+                                        title="Bet Poly(${home.team}) & Stake(${stakeAway.team})">
+                                        Combo 1
+                                    </button><br/>
+                                ` : ''}
+                                ${enableArb2 ? `
+                                    <button class="combo-btn" 
+                                        ${testMode ? '' : 'disabled'}
+                                        style="background:${testMode ? '#e67e22' : '#ccc'}; color:white; border:none; border-radius:4px; padding:4px 6px; cursor:${testMode ? 'pointer' : 'not-allowed'}; font-size:9px;"
+                                        data-poly='${JSON.stringify({ link: away.link, team: away.team, id: away.id, odds: away.odds, stake: testMode ? testAmount : s2_home_val }).replace(/'/g, "&apos;")}'
+                                        data-stake='${JSON.stringify({ link: stakeHome.link, team: stakeHome.team, odds: stakeHome.odds, stake: testMode ? testAmount : s2_away_val }).replace(/'/g, "&apos;")}'
+                                        title="Bet Poly(${away.team}) & Stake(${stakeHome.team})">
+                                        Combo 2
+                                    </button>
+                                ` : '-'}
+                            </td>
+
                              <td style="text-align: left; min-width: 140px;">
                                 <div style="margin-bottom:3px; display:flex; gap:2px;">
-                                    <button class="bet-btn poly-btn" style="${styleP_Home}" data-link="${home.link}" data-id="${home.id}" data-stake="${s1_home_val}" data-odds="${home.odds}">P: ${trunc(home.team)}</button>
-                                    <button class="bet-btn poly-btn" style="${styleP_Away}" data-link="${away.link}" data-id="${away.id}" data-stake="${s2_home_val}" data-odds="${away.odds}">P: ${trunc(away.team)}</button>
+                                    <button class="bet-btn poly-btn" ${p1Disabled} style="${styleP_Home}" data-link="${home.link}" data-id="${home.id}" data-stake="${testMode ? testAmount : s1_home_val}" data-odds="${home.odds}">P: ${trunc(home.team)}</button>
+                                    <button class="bet-btn poly-btn" ${p2Disabled} style="${styleP_Away}" data-link="${away.link}" data-id="${away.id}" data-stake="${testMode ? testAmount : s2_home_val}" data-odds="${away.odds}">P: ${trunc(away.team)}</button>
                                 </div>
                                 <div style="display:flex; gap:2px;">
-                                    <button class="bet-btn stake-btn" style="${styleS_Home}" data-link="${stakeHome.link}" data-stake="${s2_away_val}" data-odds="${stakeHome.odds}">S: ${trunc(stakeHome.team)}</button>
-                                    <button class="bet-btn stake-btn" style="${styleS_Away}" data-link="${stakeAway.link}" data-stake="${s1_away_val}" data-odds="${stakeAway.odds}">S: ${trunc(stakeAway.team)}</button>
+                                    <button class="bet-btn stake-btn" ${s1Disabled} style="${styleS_Home}" data-link="${stakeHome.link}" data-stake="${testMode ? testAmount : s2_away_val}" data-odds="${stakeHome.odds}">S: ${trunc(stakeHome.team)}</button>
+                                    <button class="bet-btn stake-btn" ${s2Disabled} style="${styleS_Away}" data-link="${stakeAway.link}" data-stake="${testMode ? testAmount : s1_away_val}" data-odds="${stakeAway.odds}">S: ${trunc(stakeAway.team)}</button>
                                 </div>
                                 <div style="margin-top:4px; text-align:right;">
                                     <button class="debug-btn" data-debug='${JSON.stringify({ home, away, stakeHome, stakeAway })}' style="border:none; background:none; cursor:pointer;" title="Send to TG Debug">
@@ -843,7 +1033,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 tableHtml += `
                     <tr>
-                        <td>
+                        <td title="${home.team} vs ${away.team}">
                             <b>${home.team}</b> vs <b>${away.team}</b>
                         </td>
                         <td>${home.odds}</td>
@@ -852,20 +1042,23 @@ document.addEventListener('DOMContentLoaded', () => {
                         <td style="color:#aaa">${stakeAway ? stakeAway.odds : '-'}</td>
                         <td style="color:#aaa">-</td>
                         <td style="color:#aaa">-</td>
+                        <td>-</td>
                          <td style="text-align: left;">
                             <div style="margin-bottom:2px">
-                                <button class="bet-btn team1-poly" data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
-                                <button class="bet-btn team2-poly" data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
+                                <button class="bet-btn team1-poly" disabled data-link="${home.link}" data-id="${home.id}">P: ${trunc(home.team)}</button>
+                                <button class="bet-btn team2-poly" disabled data-link="${away.link}" data-id="${away.id}">P: ${trunc(away.team)}</button>
                             </div>
                             ${stakeHome ? `
                             <div>
-                                <button class="bet-btn team1-stake" data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
-                                <button class="bet-btn team2-stake" data-link="${stakeAway ? stakeAway.link : ''}">S: ${trunc(stakeAway ? stakeAway.team : '')}</button>
+                                <button class="bet-btn team1-stake" disabled data-link="${stakeHome.link}">S: ${trunc(stakeHome.team)}</button>
+                                <button class="bet-btn team2-stake" disabled data-link="${stakeAway ? stakeAway.link : ''}">S: ${trunc(stakeAway ? stakeAway.team : '')}</button>
                             </div>` : ''}
                         </td>
                     </tr>
                  `;
             }
+
+            i += step;
         }
 
         tableHtml += '</tbody></table>';

@@ -220,7 +220,7 @@ let highlightEnabled = true; // Global flag for highlight state
 
 function clearAllHighlights() {
     console.log('[Auto] Clearing all highlights...');
-    
+
     // Remove data-arb-highlight attributes
     document.querySelectorAll('[data-arb-highlight]').forEach(el => {
         el.removeAttribute('data-arb-highlight');
@@ -230,7 +230,7 @@ function clearAllHighlights() {
             delete el.dataset.origOutline;
         }
     });
-    
+
     // Remove inline highlight styles from inputs
     document.querySelectorAll('input').forEach(input => {
         if (input.dataset.originalBorder !== undefined) {
@@ -245,11 +245,11 @@ function clearAllHighlights() {
             input.style.boxShadow = '';
         }
     });
-    
+
     // Remove inline highlight styles from buttons
     document.querySelectorAll('button').forEach(btn => {
         if (btn.style.border && (
-            btn.style.border.includes('rgb(0, 230, 118)') || 
+            btn.style.border.includes('rgb(0, 230, 118)') ||
             btn.style.border.includes('#00e676') ||
             btn.style.border.includes('rgb(233, 30, 99)') ||
             btn.style.border.includes('#e91e63')
@@ -259,7 +259,7 @@ function clearAllHighlights() {
             btn.style.transform = '';
         }
     });
-    
+
     console.log('[Auto] All highlights cleared');
 }
 
@@ -267,14 +267,14 @@ function clearAllHighlights() {
 function autoHighlightTeams(data) {
     // Skip if highlighting is disabled
     if (!highlightEnabled) return;
-    
+
     if (!data || !data.odds || data.odds.length < 2) return;
-    
+
     // Remove old highlights
     document.querySelectorAll('[data-arb-highlight]').forEach(el => {
         el.removeAttribute('data-arb-highlight');
     });
-    
+
     if (data.type === 'stack') {
         const stackItems = document.querySelectorAll('.outcome-content');
         stackItems.forEach((item, index) => {
@@ -311,10 +311,10 @@ function startLiveMonitoring() {
     const pushUpdate = (force = false) => {
         isScanPending = false;
         const data = scrapePageData();
-        
+
         if (data.odds.length > 0) {
             const newSnapshot = createOddsSnapshot(data);
-            
+
             // Only send update if odds actually changed OR force update
             if (force || newSnapshot !== lastOddsSnapshot) {
                 lastOddsSnapshot = newSnapshot;
@@ -347,11 +347,11 @@ function startLiveMonitoring() {
     // Create targeted observers for specific odds containers
     liveObserver = new MutationObserver((mutations) => {
         let hasRelevantChange = false;
-        
+
         for (const mutation of mutations) {
             // Check if mutation is relevant to odds display
             const target = mutation.target;
-            
+
             // Check for Stake odds changes
             if (target.matches && (
                 target.matches('[data-testid="fixture-odds"]') ||
@@ -362,7 +362,7 @@ function startLiveMonitoring() {
                 hasRelevantChange = true;
                 break;
             }
-            
+
             // Check for Polymarket odds changes
             if (target.matches && (
                 target.matches('.trading-button') ||
@@ -373,7 +373,7 @@ function startLiveMonitoring() {
                 hasRelevantChange = true;
                 break;
             }
-            
+
             // Check text content changes for odds patterns
             if (mutation.type === 'characterData') {
                 const text = target.textContent || '';
@@ -383,7 +383,7 @@ function startLiveMonitoring() {
                     break;
                 }
             }
-            
+
             // Check added nodes for odds elements
             if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
                 for (const node of mutation.addedNodes) {
@@ -409,10 +409,10 @@ function startLiveMonitoring() {
                     }
                 }
             }
-            
+
             if (hasRelevantChange) break;
         }
-        
+
         if (hasRelevantChange) {
             scheduleUpdate();
         }
@@ -427,7 +427,7 @@ function startLiveMonitoring() {
         characterData: true,
         characterDataOldValue: false
     });
-    
+
     // Also set up a polling fallback for sites that update via Canvas/WebGL or complex frameworks
     // This runs every 2 seconds as a safety net, but only sends if data actually changed
     setInterval(() => {
@@ -474,7 +474,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (request.enabled) startLiveMonitoring();
         else stopLiveMonitoring();
     }
-    
+
     // Toggle Highlight on/off
     if (request.action === "toggleHighlight") {
         highlightEnabled = request.enabled;
@@ -483,13 +483,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         sendResponse({ success: true });
     }
-    
+
     // Clear all highlights on request
     if (request.action === "clear_highlights") {
         clearAllHighlights();
         sendResponse({ success: true });
     }
-    
+
     // ... highlight handler below ...
     if (request.action === "highlight_odds") {
         // Skip if highlighting is disabled
@@ -497,7 +497,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             sendResponse({ success: false, reason: 'highlighting disabled' });
             return;
         }
-        
+
         const targets = request.targets || []; // Array of { team, type, teamIndex, isArb } 
         // type: 'polymarket' or 'stack'
         // teamIndex: 0 = Team 1 (Pink), 1 = Team 2 (Orange)
@@ -510,10 +510,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Highlight new targets using CSS classes
         targets.forEach(tgt => {
-            const highlightClass = tgt.isArb 
+            const highlightClass = tgt.isArb
                 ? (tgt.teamIndex === 0 ? 'arb1' : 'arb2')  // Arb with green glow
                 : (tgt.teamIndex === 0 ? 'team1' : 'team2'); // Regular team colors
-            
+
             // Logic to find and highlight in DOM
             if (tgt.type === 'stack') {
                 const stackItems = document.querySelectorAll('.outcome-content');
@@ -541,42 +541,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             }
         });
     }
-    
+
     // Auto-highlight teams when arb data is received (for live updates)
     if (request.action === "highlight_arb_teams") {
         // Skip if highlighting is disabled
         if (!highlightEnabled) return;
-        
+
         const arbData = request.arbData; // { team1, team2, isArb }
         if (!arbData) return;
-        
+
         // Remove old highlights
         document.querySelectorAll('[data-arb-highlight]').forEach(el => {
             el.removeAttribute('data-arb-highlight');
         });
-        
+
         // Detect page type and highlight using CSS classes
         const isStake = document.querySelector('.outcome-content');
         const isPoly = document.querySelector('button.trading-button, button[class*="trading-button"]');
-        
+
         if (isStake) {
             const stackItems = document.querySelectorAll('.outcome-content');
             stackItems.forEach((item, index) => {
                 const container = item.closest('button');
                 if (container) {
-                    const highlightClass = arbData.isArb 
-                        ? (index === 0 ? 'arb1' : 'arb2') 
+                    const highlightClass = arbData.isArb
+                        ? (index === 0 ? 'arb1' : 'arb2')
                         : (index === 0 ? 'team1' : 'team2');
                     container.setAttribute('data-arb-highlight', highlightClass);
                 }
             });
         }
-        
+
         if (isPoly) {
             const polyButtons = document.querySelectorAll('button.trading-button, button[class*="trading-button"]');
             polyButtons.forEach((btn, index) => {
-                const highlightClass = arbData.isArb 
-                    ? (index === 0 ? 'arb1' : 'arb2') 
+                const highlightClass = arbData.isArb
+                    ? (index === 0 ? 'arb1' : 'arb2')
                     : (index === 0 ? 'team1' : 'team2');
                 btn.setAttribute('data-arb-highlight', highlightClass);
             });
@@ -603,23 +603,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (!searchTerm || !buttonText) return false;
             const s = searchTerm.toUpperCase().trim();
             const b = buttonText.toUpperCase().trim();
-            
+
             // Exact match
             if (b === s) return true;
-            
+
             // Button text contains search term
             if (b.includes(s)) return true;
-            
+
             // Search term contains button text (for short names like "CLE")
             if (s.includes(b.split(' ')[0]) && b.split(' ')[0].length >= 2) return true;
-            
+
             // First 3 chars match (team abbreviations)
             if (s.length >= 3 && b.substring(0, 3) === s.substring(0, 3)) return true;
-            
+
             // Extract first word from button text and compare
             const firstWord = b.split(/[\s\d¢]+/)[0];
             if (firstWord && firstWord.length >= 2 && (s.includes(firstWord) || firstWord.includes(s))) return true;
-            
+
             // NBA team abbrev matching (e.g., "CLEV" matches "CLE", "NYK" matches "NEW YORK")
             const nbaAbbrevs = {
                 'CLE': ['CLEV', 'CLEVELAND', 'CAVALIERS', 'CAVS'],
@@ -653,7 +653,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 'LAC': ['LA CLIPPERS', 'CLIPPERS'],
                 'HOU': ['HOUSTON', 'ROCKETS']
             };
-            
+
             // Check if search term or button text is a known abbreviation
             for (const [abbrev, aliases] of Object.entries(nbaAbbrevs)) {
                 if (s === abbrev || s.includes(abbrev)) {
@@ -665,7 +665,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     if (b.includes(abbrev) || aliases.some(a => b.includes(a))) return true;
                 }
             }
-            
+
             return false;
         };
 
@@ -680,13 +680,62 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return null;
         };
 
+        // --- STAKE CLEAR LOGIC ---
+        const clearStakeBets = (callback) => {
+            console.log(`[Auto] Checking for Clear Bets button...`);
+            const clearBtn = document.querySelector('button[data-testid="reset-betslip"]');
+
+            if (clearBtn) {
+                console.log(`[Auto] Clearing previous bets...`);
+                // Robust click on clear button
+                clearBtn.click();
+
+                // Also pointer events just in case
+                const rect = clearBtn.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+
+                clearBtn.dispatchEvent(new PointerEvent('pointerdown', {
+                    bubbles: true, cancelable: true, view: window, clientX: centerX, clientY: centerY, pointerId: 1, pointerType: 'mouse', isPrimary: true
+                }));
+                clearBtn.dispatchEvent(new PointerEvent('pointerup', {
+                    bubbles: true, cancelable: true, view: window, clientX: centerX, clientY: centerY, pointerId: 1, pointerType: 'mouse', isPrimary: true
+                }));
+                clearBtn.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window, clientX: centerX, clientY: centerY }));
+
+                // Wait a bit for clearing to happen
+                setTimeout(() => {
+                    console.log(`[Auto] Bets cleared.`);
+                    if (callback) callback();
+                }, 400);
+            } else {
+                console.log(`[Auto] "Clear Bets" button not found (Slip might be empty). Proceeding...`);
+                if (callback) callback();
+            }
+        };
+
         const checkAndClick = (attempts = 0) => {
+            // Special initialization for Stake: Clear bets on first attempt
+            if (attempts === 0) {
+                // Determine if we are on Stake (via URL or element check)
+                const isStake = document.querySelector('.outcome-content') || window.location.hostname.includes('stake');
+                if (isStake) {
+                    clearStakeBets(() => {
+                        proceedWithCheck(attempts);
+                    });
+                    return;
+                }
+            }
+            proceedWithCheck(attempts);
+        };
+
+        const proceedWithCheck = (attempts) => {
             if (attempts >= retryLimit) {
                 console.warn(`[Auto] Max retries (${retryLimit}) reached.`);
-                chrome.runtime.sendMessage({ 
-                    action: "bet_error", 
+                chrome.runtime.sendMessage({
+                    action: "bet_error",
                     error: `Element not found or odds mismatch after ${retryLimit} retries`,
-                    team: targetTeam 
+                    team: targetTeam
                 });
                 return;
             }
@@ -702,7 +751,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 'button[data-color="custom"]',
                 'button[class*="c-"]' // Polymarket uses dynamic class names
             ];
-            
+
             let polyButtons = [];
             for (const sel of polySelectors) {
                 const btns = document.querySelectorAll(sel);
@@ -716,7 +765,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             // Also check for the specific buy panel buttons
             const buyPanelButtons = document.querySelectorAll('button[class*="bg-"]');
             console.log(`[Auto] Found ${buyPanelButtons.length} bg-* buttons`);
-            
+
             // Log all potential buttons for debugging
             const allButtons = document.querySelectorAll('button');
             console.log(`[Auto] Total buttons on page: ${allButtons.length}`);
@@ -735,7 +784,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         isMatch = true;
                         console.log(`[Auto] Fuzzy matched: ${targetTeam} ~ ${txt}`);
                     }
-                    
+
                     // Also check the parent link element for team name
                     if (!isMatch && targetTeam) {
                         const linkEl = btn.closest('a');
@@ -750,7 +799,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
                     if (isMatch) {
                         console.log(`[Auto] MATCH found for ${targetTeam} in button: "${txt}"`);
-                        
+
                         // Match Odds
                         const currentOdds = parseOddsFromText(txt);
                         console.log(`[Auto] Parsed odds from button: ${currentOdds}`);
@@ -779,13 +828,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             if (!found) {
                 const stackItems = document.querySelectorAll('.outcome-content');
                 console.log(`[Auto] Found ${stackItems.length} Stake outcome items`);
-                
+
                 for (const item of stackItems) {
                     const nameEl = item.querySelector('[data-testid="outcome-button-name"]');
                     if (nameEl) {
                         const team = nameEl.textContent.trim().toUpperCase();
                         console.log(`[Auto] Checking Stake team: "${team}"`);
-                        
+
                         // Use fuzzy matching for Stake as well
                         if (fuzzyMatch(targetTeam, team)) {
                             console.log(`[Auto] Fuzzy matched Stake: ${targetTeam} ~ ${team}`);
@@ -829,41 +878,41 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         const robustClick = (el) => {
             console.log(`[Auto] robustClick called on:`, el);
             console.log(`[Auto] Element text: "${el.textContent.trim().substring(0, 50)}"`);
-            
+
             // Ensure element is visible
             el.scrollIntoView({ behavior: 'auto', block: 'center' });
-            
+
             // Get element position
             const rect = el.getBoundingClientRect();
             const centerX = rect.left + rect.width / 2;
             const centerY = rect.top + rect.height / 2;
-            
+
             console.log(`[Auto] Element position: (${centerX}, ${centerY})`);
-            
+
             // Visual feedback
             el.style.border = "4px solid #00e676";
             el.style.boxShadow = "0 0 20px rgba(0, 230, 118, 0.8)";
-            
+
             // Helper function to perform all click methods
             const performClick = () => {
                 // Focus first
                 if (el.focus) el.focus();
-                
+
                 // Direct click
                 el.click();
-                
+
                 // Pointer events
-                el.dispatchEvent(new PointerEvent('pointerdown', { 
+                el.dispatchEvent(new PointerEvent('pointerdown', {
                     bubbles: true, cancelable: true, view: window,
                     clientX: centerX, clientY: centerY, pointerId: 1,
                     pointerType: 'mouse', isPrimary: true
                 }));
-                el.dispatchEvent(new PointerEvent('pointerup', { 
+                el.dispatchEvent(new PointerEvent('pointerup', {
                     bubbles: true, cancelable: true, view: window,
                     clientX: centerX, clientY: centerY, pointerId: 1,
                     pointerType: 'mouse', isPrimary: true
                 }));
-                
+
                 // Mouse events
                 el.dispatchEvent(new MouseEvent('mousedown', {
                     bubbles: true, cancelable: true, view: window,
@@ -878,16 +927,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     clientX: centerX, clientY: centerY, button: 0
                 }));
             };
-            
+
             // Click 1: Immediate
             console.log(`[Auto] Click attempt 1`);
             performClick();
-            
+
             // Click 2: After 100ms
             setTimeout(() => {
                 console.log(`[Auto] Click attempt 2`);
                 performClick();
-                
+
                 // Also try clicking the parent span wrapper (Polymarket wraps buttons in spans)
                 const parentSpan = el.closest('span[style*="display: flex"]');
                 if (parentSpan && parentSpan !== el) {
@@ -895,7 +944,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     parentSpan.click();
                 }
             }, 100);
-            
+
             // Click 3: After 200ms - click inner span
             setTimeout(() => {
                 console.log(`[Auto] Click attempt 3 - inner elements`);
@@ -909,7 +958,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     pEl.click();
                 }
             }, 200);
-            
+
             // Click 4: After 300ms - final attempt with different event
             setTimeout(() => {
                 console.log(`[Auto] Click attempt 4 - final`);
@@ -920,44 +969,44 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 // Dispatch on document at element coordinates
                 document.elementFromPoint(centerX, centerY)?.click();
             }, 300);
-            
+
             console.log(`[Auto] robustClick initiated - 4 attempts scheduled`);
         };
 
         const fillPolySlip = (amount) => {
             console.log(`[Auto] fillPolySlip called with amount: ${amount}, team: ${targetTeam}`);
-            
+
             const attempt = (n) => {
                 if (n > 40) {
                     console.log(`[Auto] fillPolySlip max attempts reached`);
                     return;
                 }
-                
+
                 console.log(`[Auto] fillPolySlip attempt ${n}`);
-                
+
                 // Step 1: Look for the bet panel (div with width: 340px)
                 const betPanel = document.querySelector('div[style*="width: 340px"]');
-                
+
                 if (!betPanel) {
                     console.log(`[Auto] Bet panel not found yet, retrying...`);
                     setTimeout(() => attempt(n + 1), 200);
                     return;
                 }
-                
+
                 console.log(`[Auto] Bet panel found`);
-                
+
                 // Step 2: Find and click the correct outcome button
                 // These are inside #outcome-buttons with role="radio"
                 const outcomeButtons = document.querySelectorAll('#outcome-buttons button[role="radio"]');
                 console.log(`[Auto] Found ${outcomeButtons.length} outcome buttons`);
-                
+
                 let targetOutcomeBtn = null;
                 let isAlreadySelected = false;
-                
+
                 for (const btn of outcomeButtons) {
                     const btnText = btn.textContent.trim().toUpperCase();
                     console.log(`[Auto] Checking outcome: "${btnText}"`);
-                    
+
                     if (fuzzyMatch(targetTeam, btnText)) {
                         targetOutcomeBtn = btn;
                         isAlreadySelected = btn.getAttribute('aria-checked') === 'true';
@@ -965,26 +1014,26 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         break;
                     }
                 }
-                
+
                 // If target team button found but not selected, click it with robust method
                 if (targetOutcomeBtn && !isAlreadySelected) {
                     console.log(`[Auto] Clicking to select team: ${targetTeam}`);
-                    
+
                     // Use multiple click methods for the outcome button
                     const rect = targetOutcomeBtn.getBoundingClientRect();
                     const centerX = rect.left + rect.width / 2;
                     const centerY = rect.top + rect.height / 2;
-                    
+
                     const clickOutcome = () => {
                         targetOutcomeBtn.focus();
                         targetOutcomeBtn.click();
-                        
-                        targetOutcomeBtn.dispatchEvent(new PointerEvent('pointerdown', { 
+
+                        targetOutcomeBtn.dispatchEvent(new PointerEvent('pointerdown', {
                             bubbles: true, cancelable: true, view: window,
                             clientX: centerX, clientY: centerY, pointerId: 1,
                             pointerType: 'mouse', isPrimary: true
                         }));
-                        targetOutcomeBtn.dispatchEvent(new PointerEvent('pointerup', { 
+                        targetOutcomeBtn.dispatchEvent(new PointerEvent('pointerup', {
                             bubbles: true, cancelable: true, view: window,
                             clientX: centerX, clientY: centerY, pointerId: 1,
                             pointerType: 'mouse', isPrimary: true
@@ -1002,17 +1051,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             clientX: centerX, clientY: centerY, button: 0
                         }));
                     };
-                    
+
                     // Click multiple times
                     clickOutcome();
                     setTimeout(clickOutcome, 100);
                     setTimeout(clickOutcome, 200);
-                    
+
                     // Wait for UI to update after selection
                     setTimeout(() => attempt(n + 1), 400);
                     return;
                 }
-                
+
                 // If we couldn't find matching outcome button, the wrong panel might be open
                 if (!targetOutcomeBtn && outcomeButtons.length > 0) {
                     console.log(`[Auto] Target team ${targetTeam} not found in panel outcomes. Panel might be for wrong game.`);
@@ -1024,18 +1073,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     setTimeout(() => attempt(n + 1), 300);
                     return;
                 }
-                
+
                 // Step 3: Find the amount input
                 const input = document.querySelector('#market-order-amount-input');
-                
+
                 if (!input) {
                     console.log(`[Auto] Input not found, retrying...`);
                     setTimeout(() => attempt(n + 1), 200);
                     return;
                 }
-                
+
                 console.log(`[Auto] Input found, current value: "${input.value}"`);
-                
+
                 // Extract odds from the selected outcome button
                 let extractedOdds = null;
                 const selectedOutcome = document.querySelector('#outcome-buttons button[aria-checked="true"]');
@@ -1047,7 +1096,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         console.log(`[Auto] Extracted odds: ${extractedOdds}`);
                     }
                 }
-                
+
                 // Also try avg price tag
                 if (!extractedOdds) {
                     const avgPriceEl = document.querySelector('.odds-converted-tag');
@@ -1056,74 +1105,74 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         console.log(`[Auto] Extracted odds from avg price: ${extractedOdds}`);
                     }
                 }
-                
+
                 const finalOdds = extractedOdds || expectedOdds;
                 console.log(`[Auto] Final odds: ${finalOdds}`);
-                
+
                 // Set input value using React's native value setter
                 const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                 nativeInputValueSetter.call(input, '1');
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 input.dispatchEvent(new Event('change', { bubbles: true }));
-                
+
                 console.log(`[Auto] Input value set to: "${input.value}"`);
-                
+
                 // Wait for panel to expand (shows "To win" section)
                 setTimeout(() => {
                     console.log(`[Auto] Looking for Buy button...`);
-                    
+
                     // Step 4: Find the Buy button
                     // It's a trading-button with tabindex="0" (not "-1" like outcome buttons)
                     // And NOT inside #outcome-buttons
                     let buyBtn = null;
                     const allBtns = document.querySelectorAll('button.trading-button');
-                    
+
                     for (const btn of allBtns) {
                         // Skip if inside outcome-buttons
                         if (btn.closest('#outcome-buttons')) continue;
-                        
+
                         // Skip if it's a radio button
                         if (btn.getAttribute('role') === 'radio') continue;
-                        
+
                         const txt = btn.textContent.toLowerCase().replace(/\s+/g, ' ').trim();
                         console.log(`[Auto] Checking button: "${txt}"`);
-                        
+
                         if (txt.startsWith('buy ')) {
                             buyBtn = btn;
                             console.log(`[Auto] Found Buy button: "${txt}"`);
                             break;
                         }
                     }
-                    
+
                     if (!buyBtn) {
                         console.log(`[Auto] Buy button not found, retrying...`);
                         setTimeout(() => attempt(n + 1), 300);
                         return;
                     }
-                    
+
                     // Click the Buy button multiple times
                     console.log(`[Auto] Clicking Buy button...`);
-                    
+
                     const rect = buyBtn.getBoundingClientRect();
                     const centerX = rect.left + rect.width / 2;
                     const centerY = rect.top + rect.height / 2;
-                    
+
                     const clickBuy = () => {
                         buyBtn.focus();
                         buyBtn.click();
-                        
+
                         // Pointer events
-                        buyBtn.dispatchEvent(new PointerEvent('pointerdown', { 
+                        buyBtn.dispatchEvent(new PointerEvent('pointerdown', {
                             bubbles: true, cancelable: true, view: window,
                             clientX: centerX, clientY: centerY, pointerId: 1,
                             pointerType: 'mouse', isPrimary: true
                         }));
-                        buyBtn.dispatchEvent(new PointerEvent('pointerup', { 
+                        buyBtn.dispatchEvent(new PointerEvent('pointerup', {
                             bubbles: true, cancelable: true, view: window,
                             clientX: centerX, clientY: centerY, pointerId: 1,
                             pointerType: 'mouse', isPrimary: true
                         }));
-                        
+
                         // Mouse events
                         buyBtn.dispatchEvent(new MouseEvent('mousedown', {
                             bubbles: true, cancelable: true, view: window,
@@ -1138,16 +1187,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             clientX: centerX, clientY: centerY, button: 0
                         }));
                     };
-                    
+
                     // Click 1
                     clickBuy();
-                    
+
                     // Click 2 after 100ms
                     setTimeout(() => {
                         console.log(`[Auto] Buy button click 2`);
                         clickBuy();
                     }, 100);
-                    
+
                     // Click 3 after 200ms
                     setTimeout(() => {
                         console.log(`[Auto] Buy button click 3`);
@@ -1156,9 +1205,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         const innerSpan = buyBtn.querySelector('span');
                         if (innerSpan) innerSpan.click();
                     }, 200);
-                    
+
                     console.log(`[Auto] Buy button click sequence initiated`);
-                    
+
                     // Save bet info
                     const betInfo = {
                         platform: 'polymarket',
@@ -1168,44 +1217,44 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         timestamp: Date.now(),
                         status: 'placed'
                     };
-                    
+
                     chrome.storage.local.get(['activeBets', 'totalBets'], (res) => {
                         const activeBets = res.activeBets || [];
                         const totalBets = res.totalBets || 0;
                         activeBets.push(betInfo);
-                        chrome.storage.local.set({ 
+                        chrome.storage.local.set({
                             activeBets: activeBets,
                             totalBets: totalBets + 1
                         });
                         console.log(`[Auto] Bet saved:`, betInfo);
                     });
-                    
-                    chrome.runtime.sendMessage({ 
-                        action: "bet_placed_success", 
-                        team: targetTeam, 
+
+                    chrome.runtime.sendMessage({
+                        action: "bet_placed_success",
+                        team: targetTeam,
                         amount: 1,
                         odds: finalOdds,
                         platform: 'polymarket'
                     });
-                    
+
                 }, 800); // Wait for panel to expand after entering amount
             };
-            
+
             // Start with a small delay to let the panel render
             setTimeout(() => attempt(0), 300);
         };
 
         const fillStakeSlip = (amount) => {
             console.log(`[Auto] fillStakeSlip called with amount: ${amount}`);
-            
+
             const attempt = (n) => {
                 if (n > 30) {
                     console.log(`[Auto] fillStakeSlip max attempts reached`);
                     return;
                 }
-                
+
                 console.log(`[Auto] fillStakeSlip attempt ${n}`);
-                
+
                 // Try multiple selectors for Stake
                 const inputSelectors = [
                     'input[data-testid="input-bet-amount"]',
@@ -1214,7 +1263,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     '.bet-slip input[type="text"]',
                     '.betslip input'
                 ];
-                
+
                 let input = null;
                 for (const sel of inputSelectors) {
                     input = document.querySelector(sel);
@@ -1223,14 +1272,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         break;
                     }
                 }
-                
+
                 const placeBtnSelectors = [
                     'button[data-testid="betSlip-place-bets-button"]',
                     'button[data-testid="place-bet-button"]',
                     'button.place-bet',
                     'button[class*="place"]'
                 ];
-                
+
                 let placeBtn = null;
                 for (const sel of placeBtnSelectors) {
                     placeBtn = document.querySelector(sel);
@@ -1239,7 +1288,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         break;
                     }
                 }
-                
+
                 // Also look for button by text
                 if (!placeBtn) {
                     const allBtns = document.querySelectorAll('button');
@@ -1252,44 +1301,44 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         }
                     }
                 }
-                
+
                 if (input && placeBtn) {
                     console.log(`[Auto] Stake input and Place Bet button found!`);
                     const valueToSet = amount || "0.01";
-                    
+
                     input.focus();
                     input.click();
-                    
+
                     // Multiple methods to set value
                     const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
                     nativeSetter.call(input, valueToSet);
                     input.value = valueToSet;
-                    
+
                     input.dispatchEvent(new Event('input', { bubbles: true }));
                     input.dispatchEvent(new Event('change', { bubbles: true }));
-                    input.dispatchEvent(new InputEvent('input', { 
-                        bubbles: true, 
+                    input.dispatchEvent(new InputEvent('input', {
+                        bubbles: true,
                         inputType: 'insertText',
                         data: valueToSet
                     }));
-                    
+
                     // Try execCommand
                     input.select();
                     document.execCommand('insertText', false, valueToSet);
-                    
+
                     console.log(`[Auto] Stake input value set to: ${input.value}`);
                     input.style.border = "3px solid #00e676";
 
                     setTimeout(() => {
                         console.log(`[Auto] Final Stake input value: ${input.value}`);
-                        
+
                         // Highlight and click Place Bet button
                         placeBtn.style.border = "4px solid #e91e63";
                         placeBtn.style.boxShadow = "0 0 15px rgba(233, 30, 99, 0.8)";
-                        
+
                         console.log(`[Auto] 🚀 Clicking Place Bet button...`);
                         robustClick(placeBtn);
-                        
+
                         // Store the bet info
                         const betInfo = {
                             platform: 'stake',
@@ -1299,29 +1348,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             timestamp: Date.now(),
                             status: 'pending'
                         };
-                        
+
                         chrome.storage.local.get(['activeBets', 'totalBets'], (res) => {
                             const activeBets = res.activeBets || [];
                             const totalBets = res.totalBets || 0;
                             activeBets.push(betInfo);
-                            chrome.storage.local.set({ 
+                            chrome.storage.local.set({
                                 activeBets: activeBets,
                                 totalBets: totalBets + 1
                             });
                             console.log(`[Auto] ✅ Stake bet recorded:`, betInfo);
                         });
-                        
-                        chrome.runtime.sendMessage({ 
-                            action: "bet_placed_success", 
-                            team: targetTeam, 
-                            amount: amount, 
+
+                        chrome.runtime.sendMessage({
+                            action: "bet_placed_success",
+                            team: targetTeam,
+                            amount: amount,
                             odds: expectedOdds,
                             platform: 'stake'
                         });
-                        
+
                         // Monitor for result
                         monitorStakeResult(targetTeam, parseFloat(amount) || 0.01, expectedOdds);
-                        
+
                     }, 500);
                 } else if (input && !placeBtn) {
                     // Input found but no Place Bet button - still fill the input
@@ -1342,17 +1391,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Monitor Polymarket result for win/loss
         const monitorPolymarketResult = (team, amount, odds) => {
             console.log(`[Auto] 📊 Monitoring Polymarket result for ${team}...`);
-            
+
             let checkCount = 0;
             const maxChecks = 60; // Check for 30 seconds
-            
+
             const checkResult = () => {
                 checkCount++;
                 if (checkCount > maxChecks) {
                     console.log(`[Auto] ⏰ Monitoring timeout for ${team}`);
                     return;
                 }
-                
+
                 // Look for success/error messages on the page
                 const successIndicators = [
                     '.toast-success',
@@ -1361,7 +1410,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     'div:contains("Order placed")',
                     'div:contains("Success")'
                 ];
-                
+
                 const errorIndicators = [
                     '.toast-error',
                     '[class*="error"]',
@@ -1369,10 +1418,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     'div:contains("Failed")',
                     'div:contains("Error")'
                 ];
-                
+
                 let isSuccess = false;
                 let isError = false;
-                
+
                 // Check for success
                 for (const sel of successIndicators) {
                     try {
@@ -1381,9 +1430,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             isSuccess = true;
                             break;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }
-                
+
                 // Check for error
                 for (const sel of errorIndicators) {
                     try {
@@ -1392,19 +1441,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             isError = true;
                             break;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }
-                
+
                 if (isSuccess) {
                     const profit = (amount * odds) - amount;
                     console.log(`[Auto] ✅ WIN on Polymarket! Team: ${team}, Profit: $${profit.toFixed(4)}`);
-                    
+
                     // Update storage with win
                     chrome.storage.local.get(['totalProfit', 'wins', 'betHistory'], (res) => {
                         const totalProfit = (res.totalProfit || 0) + profit;
                         const wins = (res.wins || 0) + 1;
                         const betHistory = res.betHistory || [];
-                        
+
                         betHistory.push({
                             platform: 'polymarket',
                             team: team,
@@ -1414,16 +1463,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             result: 'win',
                             timestamp: Date.now()
                         });
-                        
-                        chrome.storage.local.set({ 
+
+                        chrome.storage.local.set({
                             totalProfit: totalProfit,
                             wins: wins,
                             betHistory: betHistory
                         });
-                        
+
                         console.log(`[Auto] 💰 Total Profit: $${totalProfit.toFixed(4)}, Wins: ${wins}`);
                     });
-                    
+
                     chrome.runtime.sendMessage({
                         action: "bet_result",
                         platform: 'polymarket',
@@ -1431,15 +1480,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         result: 'win',
                         profit: profit
                     });
-                    
+
                 } else if (isError) {
                     console.log(`[Auto] ❌ LOSS/ERROR on Polymarket for ${team}`);
-                    
+
                     chrome.storage.local.get(['totalProfit', 'losses', 'betHistory'], (res) => {
                         const totalProfit = (res.totalProfit || 0) - amount;
                         const losses = (res.losses || 0) + 1;
                         const betHistory = res.betHistory || [];
-                        
+
                         betHistory.push({
                             platform: 'polymarket',
                             team: team,
@@ -1449,16 +1498,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             result: 'loss',
                             timestamp: Date.now()
                         });
-                        
-                        chrome.storage.local.set({ 
+
+                        chrome.storage.local.set({
                             totalProfit: totalProfit,
                             losses: losses,
                             betHistory: betHistory
                         });
-                        
+
                         console.log(`[Auto] 📉 Total Profit: $${totalProfit.toFixed(4)}, Losses: ${losses}`);
                     });
-                    
+
                     chrome.runtime.sendMessage({
                         action: "bet_result",
                         platform: 'polymarket',
@@ -1466,31 +1515,31 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         result: 'loss',
                         profit: -amount
                     });
-                    
+
                 } else {
                     // Keep checking
                     setTimeout(checkResult, 500);
                 }
             };
-            
+
             // Start checking after a delay
             setTimeout(checkResult, 1000);
         };
-        
+
         // Monitor Stake result for win/loss
         const monitorStakeResult = (team, amount, odds) => {
             console.log(`[Auto] 📊 Monitoring Stake result for ${team}...`);
-            
+
             let checkCount = 0;
             const maxChecks = 60;
-            
+
             const checkResult = () => {
                 checkCount++;
                 if (checkCount > maxChecks) {
                     console.log(`[Auto] ⏰ Monitoring timeout for ${team}`);
                     return;
                 }
-                
+
                 // Stake-specific success/error selectors
                 const successIndicators = [
                     '[data-testid="bet-success"]',
@@ -1498,16 +1547,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                     '[class*="success"]',
                     '[class*="confirmed"]'
                 ];
-                
+
                 const errorIndicators = [
                     '[data-testid="bet-error"]',
                     '[class*="error"]',
                     '[class*="rejected"]'
                 ];
-                
+
                 let isSuccess = false;
                 let isError = false;
-                
+
                 for (const sel of successIndicators) {
                     try {
                         const el = document.querySelector(sel);
@@ -1515,9 +1564,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             isSuccess = true;
                             break;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }
-                
+
                 for (const sel of errorIndicators) {
                     try {
                         const el = document.querySelector(sel);
@@ -1525,18 +1574,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             isError = true;
                             break;
                         }
-                    } catch (e) {}
+                    } catch (e) { }
                 }
-                
+
                 if (isSuccess) {
                     const profit = (amount * odds) - amount;
                     console.log(`[Auto] ✅ WIN on Stake! Team: ${team}, Profit: $${profit.toFixed(4)}`);
-                    
+
                     chrome.storage.local.get(['totalProfit', 'wins', 'betHistory'], (res) => {
                         const totalProfit = (res.totalProfit || 0) + profit;
                         const wins = (res.wins || 0) + 1;
                         const betHistory = res.betHistory || [];
-                        
+
                         betHistory.push({
                             platform: 'stake',
                             team: team,
@@ -1546,16 +1595,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             result: 'win',
                             timestamp: Date.now()
                         });
-                        
-                        chrome.storage.local.set({ 
+
+                        chrome.storage.local.set({
                             totalProfit: totalProfit,
                             wins: wins,
                             betHistory: betHistory
                         });
-                        
+
                         console.log(`[Auto] 💰 Total Profit: $${totalProfit.toFixed(4)}, Wins: ${wins}`);
                     });
-                    
+
                     chrome.runtime.sendMessage({
                         action: "bet_result",
                         platform: 'stake',
@@ -1563,15 +1612,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         result: 'win',
                         profit: profit
                     });
-                    
+
                 } else if (isError) {
                     console.log(`[Auto] ❌ LOSS/ERROR on Stake for ${team}`);
-                    
+
                     chrome.storage.local.get(['totalProfit', 'losses', 'betHistory'], (res) => {
                         const totalProfit = (res.totalProfit || 0) - amount;
                         const losses = (res.losses || 0) + 1;
                         const betHistory = res.betHistory || [];
-                        
+
                         betHistory.push({
                             platform: 'stake',
                             team: team,
@@ -1581,16 +1630,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                             result: 'loss',
                             timestamp: Date.now()
                         });
-                        
-                        chrome.storage.local.set({ 
+
+                        chrome.storage.local.set({
                             totalProfit: totalProfit,
                             losses: losses,
                             betHistory: betHistory
                         });
-                        
+
                         console.log(`[Auto] 📉 Total Profit: $${totalProfit.toFixed(4)}, Losses: ${losses}`);
                     });
-                    
+
                     chrome.runtime.sendMessage({
                         action: "bet_result",
                         platform: 'stake',
@@ -1598,12 +1647,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                         result: 'loss',
                         profit: -amount
                     });
-                    
+
                 } else {
                     setTimeout(checkResult, 500);
                 }
             };
-            
+
             setTimeout(checkResult, 1000);
         };
 
@@ -1618,13 +1667,13 @@ let observer = null;
 chrome.storage.local.get(['isEnabled', 'liveScanEnabled', 'highlightEnabled'], (result) => {
     isEnabled = result.isEnabled !== false; // Default true
     highlightEnabled = result.highlightEnabled !== false; // Default true
-    
+
     if (isEnabled) {
         runConverter();
         setTimeout(runConverter, 1000);
         startObserver();
     }
-    
+
     // Auto-start live monitoring if enabled in settings
     if (result.liveScanEnabled === true) {
         console.log("[Content] Auto-starting live monitoring from saved setting");

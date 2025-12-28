@@ -89,14 +89,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return true;
     }
 
-    if (request.action === "open_and_click") {
-        const { url, team, id } = request;
+    // Helper Function for Trade Execution
+    const performTrade = (tradeReq) => {
+        const { url, team, id, amount, expectedOdds } = tradeReq;
 
         // Helper to inject content script and then trigger click
         const injectAndClick = async (tabId) => {
-            const amount = request.amount;
-            const expectedOdds = request.expectedOdds;
-            
             try {
                 // First, try to inject the content script (in case it's not loaded)
                 await chrome.scripting.executeScript({
@@ -108,18 +106,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 console.log("Script injection note:", e.message);
                 // Script might already be loaded, continue anyway
             }
-            
+
             // Small delay after injection
             await new Promise(resolve => setTimeout(resolve, 500));
-            
+
             // Now send the click command
             triggerClick(tabId, 5);
         };
 
         // Helper to trigger click with retry
         const triggerClick = (tabId, retries = 5) => {
-            const amount = request.amount;
-            const expectedOdds = request.expectedOdds;
             chrome.tabs.sendMessage(tabId, { action: "click_bet_button", team: team, id: id, amount: amount, expectedOdds: expectedOdds, retryLimit: 5 }, (response) => {
                 const err = chrome.runtime.lastError;
                 if (err) {
@@ -145,7 +141,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             });
         };
 
-        // 1. Check if tab exists
+        // Check if tab exists
         chrome.tabs.query({}, (tabs) => {
             const existingTab = tabs.find(t => t.url === url || t.url.includes(url));
             if (existingTab) {
@@ -167,6 +163,32 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 });
             }
         });
+    };
+
+    if (request.action === "open_and_click") {
+        performTrade(request);
+        return true;
+    }
+
+    if (request.action === "combined_bet") {
+        const { poly, stake } = request;
+
+        // Execute Poly Trade first
+        if (poly) {
+            console.log("Executing Combined Bet - Part 1: Poly");
+            performTrade(poly);
+        }
+
+        // Wait then execute Stake Trade
+        // Using a longer delay (e.g. 1.5s) to ensure Poly tab is handled and browser is responsive
+        // Note: Switching tabs for Stake will hide Poly tab.
+        setTimeout(() => {
+            if (stake) {
+                console.log("Executing Combined Bet - Part 2: Stake");
+                performTrade(stake);
+            }
+        }, 1500);
+
         return true;
     }
 });
@@ -437,13 +459,13 @@ function handleNewData(newData) {
                 type: newData.type === 'polymarket' ? 'polymarket' : 'stack',
                 teamIndex: idx % 2  // Alternate: 0 = Pink, 1 = Orange
             }));
-            
+
             // Send highlight to all tabs
             chrome.tabs.query({}, (tabs) => {
                 tabs.forEach(t => {
                     try {
                         chrome.tabs.sendMessage(t.id, { action: "highlight_odds", targets: highlightTargets });
-                    } catch(e) {}
+                    } catch (e) { }
                 });
             });
         }
@@ -476,7 +498,7 @@ function handleNewData(newData) {
                                 tabs.forEach(t => {
                                     try {
                                         chrome.tabs.sendMessage(t.id, { action: "highlight_odds", targets: targets });
-                                    } catch(e) {}
+                                    } catch (e) { }
                                 });
                             });
                         } catch (e) {
